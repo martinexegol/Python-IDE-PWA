@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    user-select: none;
+    overflow: hidden;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-ligatures: normal;
+  }
+}
+
+/* Custom squiggly error underline for live Python linter */
+.squiggly-error {
+  background-position: bottom left;
+  background-repeat: repeat-x;
+  background-size: 6px 3px;
+  background-image: url("data:image/svg+xml%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%206%203'%3E%3Cpath%20d%3D'M0%203%20Q%201.5%200%203%203%20Q%204.5%206%206%203'%20fill%3D'none'%20stroke%3D'%23ef4444'%20stroke-width%3D'1.2'%2F%3E%3C%2Fsvg%3E");
+  padding-bottom: 2px;
+}
+
+.squiggly-warning {
+  background-position: bottom left;
+  background-repeat: repeat-x;
+  background-size: 6px 3px;
+  background-image: url("data:image/svg+xml%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%206%203'%3E%3Cpath%20d%3D'M0%203%20Q%201.5%200%203%203%20Q%204.5%206%206%203'%20fill%3D'none'%20stroke%3D'%23f59e0b'%20stroke-width%3D'1.2'%2F%3E%3C%2Fsvg%3E");
+  padding-bottom: 2px;
+}
+
+/* Custom scrollbars for editor & console */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 140, 140, 0.25);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 140, 140, 0.45);
+}

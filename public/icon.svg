@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="pythonBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#387EB8" />
+      <stop offset="100%" stop-color="#285980" />
+    </linearGradient>
+    <linearGradient id="pythonYellow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE873" />
+      <stop offset="100%" stop-color="#FFD43B" />
+    </linearGradient>
+  </defs>
+  <!-- Background squircle -->
+  <rect width="512" height="512" rx="108" fill="#111827"/>
+  <!-- Subtle border -->
+  <rect width="504" height="504" x="4" y="4" rx="104" fill="none" stroke="#387EB8" stroke-opacity="0.4" stroke-width="4"/>
+  <!-- Python dual-snake emblem -->
+  <g transform="translate(256, 256) scale(3.2) translate(-55, -55)">
+    <!-- Top Blue Snake -->
+    <path
+      d="M54.5 10 C32 10 33 20 33 20 L33 30 L55 30 L55 33 L24 33 C14 33 5 39 5 54 C5 69 13 74 23 74 L29 74 L29 65 C29 55 38 46 48 46 L70 46 C77 46 83 40 83 33 L83 23 C83 13 74 10 54.5 10 Z M43 18 C45.2 18 47 19.8 47 22 C47 24.2 45.2 26 43 26 C40.8 26 39 24.2 39 22 C39 19.8 40.8 18 43 18 Z"
+      fill="url(#pythonBlue)"
+    />
+    <!-- Bottom Yellow Snake -->
+    <path
+      d="M55.5 100 C78 100 77 90 77 90 L77 80 L55 80 L55 77 L86 77 C96 77 105 71 105 56 C105 41 97 36 87 36 L81 36 L81 45 C81 55 72 64 62 64 L40 64 C33 64 27 70 27 77 L27 87 C27 97 36 100 55.5 100 Z M67 92 C64.8 92 63 90.2 63 88 C63 85.8 64.8 84 67 84 C69.2 84 71 85.8 71 88 C71 90.2 69.2 92 67 92 Z"
+      fill="url(#pythonYellow)"
+    />
+  </g>
+</svg>

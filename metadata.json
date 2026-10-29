@@ -1,0 +1,8 @@
+{
+  "name": "IDE Python",
+  "description": "IDE professionnel dédié au langage Python avec coloration syntaxique, guides d'indentation verticaux PEP 8, auto-complétion intelligente, analyse statique en direct et plus de 20 thèmes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
