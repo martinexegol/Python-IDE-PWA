@@ -16,6 +16,8 @@ interface HeaderProps {
   activeFilePath?: string;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  activeLanguage: 'c' | 'rust';
+  onSelectLanguage?: (lang: 'c' | 'rust') => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,23 +30,24 @@ export const Header: React.FC<HeaderProps> = ({
   activeFilePath,
   isSidebarCollapsed,
   onToggleSidebar,
+  activeLanguage,
+  onSelectLanguage,
 }) => {
-
   return (
     <header
-      className="flex items-center justify-between px-3 py-2 border-b select-none transition-colors duration-150 text-sm overflow-x-auto"
+      className="flex items-center justify-between px-2 sm:px-3 py-1.5 sm:py-2 border-b select-none transition-colors duration-150 text-sm gap-1.5 sm:gap-2 w-full max-w-full min-w-0"
       style={{
         backgroundColor: activeTheme.colors.headerBg,
         borderColor: activeTheme.colors.border,
         color: activeTheme.colors.textPrimary,
       }}
     >
-      {/* Brand Zone */}
-      <div className="flex items-center gap-2.5 shrink-0">
+      {/* Brand & Language Selector Zone */}
+      <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">
         {/* Toggle Sidebar Button */}
         <button
           onClick={onToggleSidebar}
-          className="p-1.5 rounded border transition-colors hover:opacity-80"
+          className="p-1.5 rounded border transition-colors hover:opacity-80 shrink-0 cursor-pointer"
           style={{
             backgroundColor: activeTheme.colors.tabInactiveBg,
             borderColor: activeTheme.colors.border,
@@ -57,32 +60,73 @@ export const Header: React.FC<HeaderProps> = ({
             <PanelLeftClose className="w-4 h-4" />
           )}
         </button>
-        {/* Python Brand Icon */}
-        <div className="flex items-center gap-2">
-          <svg className="w-6 h-6 shrink-0" viewBox="0 0 128 128">
-            <path fill="url(#python-blue)" d="M63.02 0c-16.74 0-31.14 6.74-31.14 20.31v15.2h31.85v4.56H19.5C6.46 40.07 0 49.33 0 63.65c0 14.73 7.85 23.3 20.9 23.3h9.81v-13.68c0-9.84 8.76-18.25 18.25-18.25h31.84c8.03 0 14.59-6.84 14.59-14.82V20.31C95.39 6.74 80.34 0 63.02 0zm-17.1 9.12a5.7 5.7 0 1 1 0 11.4 5.7 5.7 0 0 1 0-11.4z" />
-            <path fill="url(#python-yellow)" d="M64.98 128c16.74 0 31.14-6.74 31.14-20.31v-15.2H64.27v-4.56h44.23c13.04 0 19.5-9.26 19.5-23.58 0-14.73-7.85-23.3-20.9-23.3h-9.81v13.68c0 9.84-8.76 18.25-18.25 18.25H47.2c-8.03 0-14.59 6.84-14.59 14.82v19.89c0 13.57 15.05 20.31 32.37 20.31zm17.1-9.12a5.7 5.7 0 1 1 0-11.4 5.7 5.7 0 0 1 0 11.4z" />
-            <defs>
-              <linearGradient id="python-blue" x1="18.9%" y1="9.7%" x2="80.6%" y2="85.7%">
-                <stop offset="0%" stopColor="#387EB8" />
-                <stop offset="100%" stopColor="#366994" />
-              </linearGradient>
-              <linearGradient id="python-yellow" x1="19.8%" y1="13.2%" x2="82.4%" y2="88.3%">
-                <stop offset="0%" stopColor="#FFE873" />
-                <stop offset="100%" stopColor="#FFD43B" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <div className="flex items-baseline gap-2">
-            <span className="font-bold tracking-tight text-base whitespace-nowrap">IDE Python</span>
-            <span className="text-[11px] font-mono opacity-60">Python 3.12</span>
+
+        {/* IDE Brand Title */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center -space-x-1">
+            {/* C Icon */}
+            <svg className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 z-10" viewBox="0 0 128 128">
+              <polygon points="64,4 120,34 120,94 64,124 8,94 8,34" fill="#00599C" />
+              <polygon points="64,12 112,38 112,90 64,116 16,90 16,38" fill="#004482" />
+              <text x="64" y="82" fill="#FFFFFF" fontSize="62" fontWeight="bold" fontFamily="Arial, Helvetica, sans-serif" textAnchor="middle">C</text>
+            </svg>
+            {/* Rust Gear / Crab Icon */}
+            <svg className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 z-0 opacity-90" viewBox="0 0 128 128">
+              <circle cx="64" cy="64" r="56" fill="#CE412B" />
+              <circle cx="64" cy="64" r="44" fill="#201A18" />
+              <text x="64" y="80" fill="#FFFFFF" fontSize="48" fontWeight="bold" fontFamily="monospace" textAnchor="middle">R</text>
+            </svg>
+          </div>
+          <div className="flex items-baseline gap-1.5 sm:gap-2">
+            <span className="font-bold tracking-tight text-sm sm:text-base whitespace-nowrap">IDE C & Rust</span>
           </div>
         </div>
+
+        {/* Language Switcher Pills */}
+        {onSelectLanguage && (
+          <div
+            className="flex items-center p-0.5 rounded-lg border text-xs font-semibold shrink-0 ml-1 sm:ml-2"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+            }}
+          >
+            <button
+              onClick={() => onSelectLanguage('c')}
+              className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                activeLanguage === 'c' ? 'shadow-xs font-bold' : 'opacity-70 hover:opacity-100'
+              }`}
+              style={{
+                backgroundColor: activeLanguage === 'c' ? '#00599C' : 'transparent',
+                color: activeLanguage === 'c' ? '#FFFFFF' : activeTheme.colors.textPrimary,
+              }}
+              title="Langage C (standard C11 / GCC 13.2)"
+            >
+              <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" />
+              <span>C (GCC)</span>
+            </button>
+
+            <button
+              onClick={() => onSelectLanguage('rust')}
+              className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                activeLanguage === 'rust' ? 'shadow-xs font-bold' : 'opacity-70 hover:opacity-100'
+              }`}
+              style={{
+                backgroundColor: activeLanguage === 'rust' ? '#CE412B' : 'transparent',
+                color: activeLanguage === 'rust' ? '#FFFFFF' : activeTheme.colors.textPrimary,
+              }}
+              title="Langage Rust (rustc 1.78 / Édition 2021)"
+            >
+              <span className="w-2 h-2 rounded-full bg-orange-400 shrink-0" />
+              <span>Rust (2021)</span>
+            </button>
+          </div>
+        )}
 
         {/* Current Active File breadcrumb */}
         {activeFilePath && (
           <div
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono ml-3 border shrink-0"
+            className="hidden xl:flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono ml-1 border shrink-0 opacity-80"
             style={{
               backgroundColor: activeTheme.colors.tabInactiveBg,
               borderColor: activeTheme.colors.border,
@@ -93,17 +137,18 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
       </div>
+
       {/* Actions Zone */}
-      <div className="flex items-center gap-2 shrink-0 ml-2">
-        {/* Quick Theme Selector Dropdown (22 Themes) - Tablet and Desktop */}
-        <div className="hidden md:flex items-center gap-1">
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
+        {/* Quick Theme Selector Dropdown (22 Themes) */}
+        <div className="hidden md:flex items-center">
           <select
             value={activeTheme.id}
             onChange={(e) => {
               const theme = THEMES.find((t) => t.id === e.target.value);
               if (theme) onSelectTheme(theme);
             }}
-            className="text-xs px-2.5 py-1.5 rounded border font-medium cursor-pointer outline-none focus:ring-1"
+            className="text-xs px-2 py-1.5 rounded border font-medium cursor-pointer outline-none focus:ring-1 max-w-[105px] lg:max-w-[145px] truncate"
             style={{
               backgroundColor: activeTheme.colors.tabInactiveBg,
               borderColor: activeTheme.colors.border,
@@ -111,21 +156,21 @@ export const Header: React.FC<HeaderProps> = ({
             }}
             title="Changer de thème visuel"
           >
-            <optgroup label="⚡ Modes Haute Accessibilité (AAA)">
+            <optgroup label="⚡ Accessibilité (AAA)">
               {THEMES.filter((t) => t.category === 'high-contrast').map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name} (Accessibilité)
                 </option>
               ))}
             </optgroup>
-            <optgroup label="🌙 Thèmes Sombres (Dark)">
+            <optgroup label="🌙 Thèmes Sombres">
               {THEMES.filter((t) => t.category === 'dark').map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
               ))}
             </optgroup>
-            <optgroup label="☀️ Thèmes Clairs (Light)">
+            <optgroup label="☀️ Thèmes Clairs">
               {THEMES.filter((t) => t.category === 'light').map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
@@ -135,17 +180,17 @@ export const Header: React.FC<HeaderProps> = ({
           </select>
         </div>
 
-        {/* Theme Palette Modal Button - Accessible on all screen sizes */}
+        {/* Theme Palette Modal Button */}
         <button
           onClick={onOpenThemeModal}
-          className="p-1.5 sm:p-2 rounded border transition-colors hover:opacity-80 shrink-0"
+          className="p-1.5 sm:p-2 rounded border transition-colors hover:opacity-80 shrink-0 cursor-pointer"
           style={{
             backgroundColor: activeTheme.colors.tabInactiveBg,
             borderColor: activeTheme.colors.border,
           }}
           title="Catalogue des 22 thèmes (avec aperçu visuel)"
         >
-          <Palette className="w-4 h-4" />
+          <Palette className="w-4 h-4 shrink-0" />
         </button>
 
         {/* PWA Install Button */}
@@ -154,38 +199,40 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Format Code button */}
         <button
           onClick={onFormatCode}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border transition-colors hover:opacity-85"
+          className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded text-xs font-medium border transition-colors hover:opacity-85 shrink-0 cursor-pointer"
           style={{
             backgroundColor: activeTheme.colors.tabInactiveBg,
             borderColor: activeTheme.colors.border,
             color: activeTheme.colors.textPrimary,
           }}
-          title="Formater le code selon les standards officiels PEP 8 (4 espaces)"
+          title={`Formater le code ${activeLanguage === 'rust' ? 'Rust' : 'C'}`}
         >
-          <AlignLeft className="w-3.5 h-3.5" />
-          <span className="hidden md:inline">Formater</span>
+          <AlignLeft className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden xl:inline">Formater {activeLanguage === 'rust' ? 'Rust' : 'C'}</span>
+          <span className="inline xl:hidden">Formater</span>
         </button>
 
-        {/* Primary Run Button */}
+        {/* Primary Run Button - Never clipped */}
         <button
           onClick={onRunCode}
           disabled={isRunning}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded font-semibold text-xs transition-all shadow-sm active:scale-95 disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded font-semibold text-xs transition-all shadow-sm active:scale-95 disabled:opacity-50 shrink-0 cursor-pointer whitespace-nowrap"
           style={{
-            backgroundColor: activeTheme.colors.accent,
-            color: activeTheme.colors.accentText,
+            backgroundColor: activeLanguage === 'rust' ? '#CE412B' : activeTheme.colors.accent,
+            color: '#FFFFFF',
           }}
-          title="Exécuter le script Python (F5)"
+          title={`Compiler et exécuter (${activeLanguage === 'rust' ? 'rustc' : 'GCC'}) [F5]`}
         >
           {isRunning ? (
             <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>Exécution...</span>
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <span>Compilation...</span>
             </>
           ) : (
             <>
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Exécuter Python</span>
+              <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span className="hidden xl:inline">Compiler & Exécuter</span>
+              <span className="inline xl:hidden">Exécuter {activeLanguage === 'rust' ? 'Rust' : 'C'}</span>
             </>
           )}
         </button>

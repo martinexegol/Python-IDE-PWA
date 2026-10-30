@@ -13,7 +13,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
   diagnostics,
   onSelectProblem,
   activeTheme,
-  fileName = 'main.py',
+  fileName = 'main.c',
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -41,7 +41,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
       >
         <div className="flex items-center gap-3">
           <span className="font-semibold uppercase tracking-wider opacity-75">
-            Analyse Statique Python en Direct
+            Diagnostic du Compilateur ({fileName.endsWith('.rs') ? 'rustc 1.78' : 'GCC 13.2'})
           </span>
           <div className="flex items-center gap-2">
             <span
@@ -78,7 +78,9 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
           <div className="flex flex-col items-center justify-center h-32 opacity-70 gap-2">
             <CheckCircle2 className="w-8 h-8 text-emerald-500" />
             <p className="text-sm font-sans">Aucun problème détecté.</p>
-            <p className="text-[11px] opacity-60 font-sans">Le code Python est conforme et prêt à être exécuté sans erreur.</p>
+            <p className="text-[11px] opacity-60 font-sans">
+              Le code source {fileName.endsWith('.rs') ? 'Rust' : 'C'} est conforme et prêt à être compilé sans erreur.
+            </p>
           </div>
         ) : (
           diagnostics.map((diag) => {

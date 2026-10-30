@@ -49,12 +49,22 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         {isInstalled ? (
           <>
             <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
-            {!compact && <span>PWA Installée</span>}
+            {!compact && (
+              <>
+                <span className="hidden xl:inline">PWA Installée</span>
+                <span className="hidden sm:inline xl:hidden">PWA</span>
+              </>
+            )}
           </>
         ) : (
           <>
             <Download className="w-3.5 h-3.5 shrink-0 animate-bounce" />
-            {!compact && <span>Installer PWA</span>}
+            {!compact && (
+              <>
+                <span className="hidden xl:inline">Installer PWA</span>
+                <span className="hidden sm:inline xl:hidden">Installer</span>
+              </>
+            )}
           </>
         )}
       </button>

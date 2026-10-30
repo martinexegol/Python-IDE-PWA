@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { THEMES } from './themes';
-import { DEFAULT_FILES } from './defaultFiles';
+import { DEFAULT_WORKSPACE_FILES } from './defaultWorkspace';
 import { PythonTheme, FileNode, TabItem, PythonDiagnostic, ConsoleMessage } from './types';
-import { lintPythonCode } from './python/linter';
-import { formatPythonCode } from './python/indentation';
-import { runPythonCode } from './python/runner';
+import { lintCCode, formatCCode } from './c/linter';
+import { runCCode } from './c/runner';
+import { lintRustCode, formatRustCode } from './rust/linter';
+import { runRustCode } from './rust/runner';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
@@ -13,13 +14,20 @@ import { TerminalConsole } from './components/TerminalConsole';
 import { ThemeModal } from './components/ThemeModal';
 import { NewFileDialog } from './components/NewFileDialog';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { PWAInstallButton } from './components/PWAInstallButton';
-import { FileCode, Terminal, AlertCircle, Play, Loader2 } from 'lucide-react';
+import { HorizontalSplitter } from './components/HorizontalSplitter';
+import {
+  FileCode,
+  Terminal,
+  AlertCircle,
+  Play,
+  Loader2,
+  FolderCode,
+} from 'lucide-react';
 
 export default function App() {
-  // Theme state: default to One Dark Pro (one of the 22 themes)
+  // 1. Theme state
   const [activeTheme, setActiveTheme] = useState<PythonTheme>(() => {
-    const saved = localStorage.getItem('python_studio_theme');
+    const saved = localStorage.getItem('ide_studio_theme');
     if (saved) {
       const found = THEMES.find((t) => t.id === saved);
       if (found) return found;
@@ -27,51 +35,90 @@ export default function App() {
     return THEMES[3]; // One Dark Pro
   });
 
-  const [files, setFiles] = useState<FileNode[]>(DEFAULT_FILES);
-  const [activeFileId, setActiveFileId] = useState<string>('file-main');
+  // 2. Active Language state ('rust' | 'c')
+  const [activeLanguage, setActiveLanguage] = useState<'rust' | 'c'>(() => {
+    const saved = localStorage.getItem('ide_active_language');
+    return saved === 'c' ? 'c' : 'rust';
+  });
+
+  // 3. Multi-File Project State
+  const STORAGE_KEY = 'ide_crust_workspace_v1';
+
+  const [files, setFiles] = useState<FileNode[]>(() => {
+    // Purge legacy storage keys containing example / demo files
+    try {
+      localStorage.removeItem('ide_workspace_files');
+      localStorage.removeItem('ide_active_course_lesson');
+    } catch {
+      // ignore
+    }
+
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasOldDemoCode = parsed.some(
+            (f: any) =>
+              typeof f.content === 'string' &&
+              (f.content.includes('Hello from Rust') ||
+                f.content.includes('Hello from C') ||
+                f.content.includes('SensorData') ||
+                f.content.includes('pointers_demo') ||
+                f.content.includes('PowerSupply'))
+          );
+          if (!hasOldDemoCode) {
+            return parsed;
+          }
+        }
+      } catch {
+        // fallback
+      }
+    }
+    return DEFAULT_WORKSPACE_FILES;
+  });
+
+  const [activeFileId, setActiveFileId] = useState<string>('file-main-rs');
 
   const [openTabs, setOpenTabs] = useState<TabItem[]>([
     {
-      fileId: 'file-main',
-      name: 'main.py',
-      path: 'main.py',
+      fileId: 'file-main-rs',
+      name: 'main.rs',
+      path: 'main.rs',
       isModified: false,
     },
   ]);
 
-  // Console state
+  // 4. Console & Execution state
   const [consoleMessages, setConsoleMessages] = useState<ConsoleMessage[]>([
     {
       id: 'init-msg-1',
       type: 'system',
-      text: 'IDE Python initialisé • Python 3.12 (CPython sandbox) [x64 linux]',
-      timestamp: new Date().toLocaleTimeString('fr-FR'),
-    },
-    {
-      id: 'init-msg-2',
-      type: 'info',
-      text: 'Guides d\'indentation verticaux actifs (PEP 8, 4 espaces). Auto-complétion via les flèches + Entrée.',
+      text: 'Compilateurs prêts • rustc 1.78.0 (Rust 2021) & GCC 13.2.0 (C11)',
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     },
   ]);
   const [isRunning, setIsRunning] = useState<boolean>(false);
 
-  // Mobile view switcher (phones only < md)
+  // 5. Layout & Splitter State
+  const [editorHeightPercent, setEditorHeightPercent] = useState<number>(58);
+  const rightContainerRef = useRef<HTMLDivElement>(null);
   const [mobileView, setMobileView] = useState<'editor' | 'terminal' | 'problems'>('editor');
-
-  // Sidebar & Navigation collapse state
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  // Modals & Navigation state
+  // 6. Modals
   const [themeModalOpen, setThemeModalOpen] = useState(false);
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
   const [jumpToLine, setJumpToLine] = useState<number | null>(null);
 
-  // Save selected theme
-  const handleSelectTheme = (theme: PythonTheme) => {
-    setActiveTheme(theme);
-    localStorage.setItem('python_studio_theme', theme.id);
-  };
+  // Sync files to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
+    } catch {
+      // ignore storage overflow
+    }
+  }, [files]);
 
   // Find active file node
   const findFileNode = useCallback(
@@ -93,15 +140,69 @@ export default function App() {
     [files, activeFileId, findFileNode]
   );
 
+  // Auto-detect active language based on current file extension
+  useEffect(() => {
+    if (activeFileNode) {
+      if (activeFileNode.name.endsWith('.rs')) {
+        setActiveLanguage('rust');
+        localStorage.setItem('ide_active_language', 'rust');
+      } else if (activeFileNode.name.endsWith('.c') || activeFileNode.name.endsWith('.h')) {
+        setActiveLanguage('c');
+        localStorage.setItem('ide_active_language', 'c');
+      }
+    }
+  }, [activeFileNode]);
+
   const activeCode = activeFileNode?.content ?? '';
 
-  // Real-time live linter for Python
+  // Live compiler diagnostics for active code
   const diagnostics: PythonDiagnostic[] = useMemo(() => {
-    if (!activeFileNode?.name.endsWith('.py')) return [];
-    return lintPythonCode(activeCode);
-  }, [activeCode, activeFileNode?.name]);
+    if (activeLanguage === 'rust') {
+      return lintRustCode(activeCode);
+    }
+    return lintCCode(activeCode);
+  }, [activeCode, activeLanguage]);
 
-  // Update file content
+  // Save selected theme
+  const handleSelectTheme = (theme: PythonTheme) => {
+    setActiveTheme(theme);
+    localStorage.setItem('ide_studio_theme', theme.id);
+  };
+
+  // Switch language explicitly
+  const handleSelectLanguage = (lang: 'c' | 'rust') => {
+    setActiveLanguage(lang);
+    localStorage.setItem('ide_active_language', lang);
+
+    // Switch active tab to matching starter file if available
+    const targetFile = files.find((f) => lang === 'rust' ? f.name.endsWith('.rs') : f.name.endsWith('.c'));
+    if (targetFile) {
+      setActiveFileId(targetFile.id);
+      if (!openTabs.some((t) => t.fileId === targetFile.id)) {
+        setOpenTabs((prev) => [
+          ...prev,
+          {
+            fileId: targetFile.id,
+            name: targetFile.name,
+            path: targetFile.path,
+            isModified: false,
+          },
+        ]);
+      }
+    }
+
+    setConsoleMessages((prev) => [
+      ...prev,
+      {
+        id: `lang-switch-${Date.now()}`,
+        type: 'info',
+        text: `Langage actif : ${lang === 'rust' ? 'Rust (rustc 1.78 / Édition 2021)' : 'C (GCC 13.2 / C11 standard)'}`,
+        timestamp: new Date().toLocaleTimeString('fr-FR'),
+      },
+    ]);
+  };
+
+  // Code change handler
   const handleCodeChange = (newCode: string) => {
     const updateRecursive = (nodes: FileNode[]): FileNode[] => {
       return nodes.map((node) => {
@@ -116,56 +217,20 @@ export default function App() {
     };
 
     setFiles((prev) => updateRecursive(prev));
-
-    // Mark tab as modified
     setOpenTabs((prev) =>
       prev.map((t) => (t.fileId === activeFileId ? { ...t, isModified: true } : t))
     );
   };
 
-  // Open / Select File
-  const handleSelectFile = (file: FileNode) => {
-    if (file.isFolder) return;
-    setActiveFileId(file.id);
-
-    // If tab is not open, open it
-    if (!openTabs.some((t) => t.fileId === file.id)) {
-      setOpenTabs((prev) => [
-        ...prev,
-        {
-          fileId: file.id,
-          name: file.name,
-          path: file.path,
-          isModified: false,
-        },
-      ]);
-    }
-  };
-
-  // Close Tab
-  const handleCloseTab = (fileId: string) => {
-    const newTabs = openTabs.filter((t) => t.fileId !== fileId);
-    setOpenTabs(newTabs);
-
-    if (activeFileId === fileId) {
-      if (newTabs.length > 0) {
-        setActiveFileId(newTabs[newTabs.length - 1].fileId);
-      } else {
-        setActiveFileId('');
-      }
-    }
-  };
-
   // Jump from Diagnostics to specific line in editor
   const handleSelectProblem = (diag: PythonDiagnostic) => {
     setJumpToLine(diag.line);
-    // Switch to editor on mobile
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setMobileView('editor');
     }
   };
 
-  // Dump detailed explanations of errors into terminal console
+  // Dump detailed error report to terminal console
   const handleDumpErrorExplanations = useCallback(() => {
     if (diagnostics.length === 0) return;
 
@@ -180,7 +245,7 @@ export default function App() {
       {
         id: `diag-title-${Date.now()}`,
         type: 'stderr',
-        text: `⚠️ Rapport d'Analyse Statique Python : ${diagnostics.length} anomalie(s) détectée(s) dans ${activeFileNode?.name || 'le fichier'} :`,
+        text: `⚠️ Rapport du Compilateur ${activeLanguage === 'rust' ? 'Rust (rustc)' : 'C (GCC)'} : ${diagnostics.length} anomalie(s) détectée(s) :`,
         timestamp: timeStr,
       },
     ];
@@ -188,9 +253,9 @@ export default function App() {
     diagnostics.forEach((d, idx) => {
       const block = [
         `\n[Erreur #${idx + 1}] Ligne ${d.line}, Colonne ${d.column} : ${d.message}`,
-        `❓ Pourquoi c'est une erreur :\n   ${d.whyExplanation}`,
-        `💡 Comment la réparer :\n   ${d.howToFix}`,
-        d.suggestedCodeSnippet ? `Exemple suggéré :\n   ${d.suggestedCodeSnippet}` : '',
+        `❓ Explication :\n   ${d.whyExplanation}`,
+        `💡 Solution suggérée :\n   ${d.howToFix}`,
+        d.suggestedCodeSnippet ? `Exemple :\n   ${d.suggestedCodeSnippet}` : '',
       ]
         .filter(Boolean)
         .join('\n');
@@ -203,20 +268,11 @@ export default function App() {
       });
     });
 
-    newLogs.push({
-      id: `diag-end-${Date.now()}`,
-      type: 'info',
-      text: `💡 En appliquant ces corrections, vous évitez les erreurs de syntaxe à l'exécution.`,
-      timestamp: timeStr,
-    });
-
     setConsoleMessages((prev) => [...prev, ...newLogs]);
-  }, [diagnostics, activeFileNode]);
+  }, [diagnostics, activeLanguage]);
 
-  // Run Python Code: checks for compile errors first to prevent failures!
+  // Execute current code (Rust or C)
   const handleRunCode = async () => {
-    if (!activeFileNode) return;
-
     const compileErrors = diagnostics.filter((d) => d.severity === 'error');
     if (compileErrors.length > 0) {
       handleDumpErrorExplanations();
@@ -231,22 +287,34 @@ export default function App() {
     }
 
     setIsRunning(true);
-    const result = await runPythonCode(activeCode, activeFileNode.name);
-    setConsoleMessages((prev) => [...prev, ...result.messages]);
+    const fileName = activeFileNode?.name || (activeLanguage === 'rust' ? 'main.rs' : 'main.c');
+
+    if (activeLanguage === 'rust' || fileName.endsWith('.rs')) {
+      const result = await runRustCode(activeCode, fileName);
+      setConsoleMessages((prev) => [...prev, ...result.messages]);
+    } else {
+      const result = await runCCode(activeCode, fileName);
+      setConsoleMessages((prev) => [...prev, ...result.messages]);
+    }
+
     setIsRunning(false);
   };
 
-  // Format Python Code (PEP 8, 4 spaces)
+  // Format Code (Rust or C)
   const handleFormatCode = () => {
-    if (!activeFileNode) return;
-    const formatted = formatPythonCode(activeCode);
+    let formatted = activeCode;
+    if (activeLanguage === 'rust' || activeFileNode?.name.endsWith('.rs')) {
+      formatted = formatRustCode(activeCode);
+    } else {
+      formatted = formatCCode(activeCode);
+    }
     handleCodeChange(formatted);
     setConsoleMessages((prev) => [
       ...prev,
       {
         id: `fmt-${Date.now()}`,
         type: 'info',
-        text: `Code formaté selon les conventions officielles PEP 8 (4 espaces).`,
+        text: `Code formaté (${activeLanguage === 'rust' ? 'Rust 4 espaces' : 'C standard 4 espaces'}).`,
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
@@ -254,41 +322,123 @@ export default function App() {
 
   // REPL interactive command evaluation
   const handleExecuteRepl = async (command: string) => {
+    const isRust = activeLanguage === 'rust' || activeFileNode?.name.endsWith('.rs');
+
     setConsoleMessages((prev) => [
       ...prev,
       {
         id: `repl-in-${Date.now()}`,
         type: 'system',
-        text: `python>>> ${command}`,
+        text: `${isRust ? 'rust-sh$' : 'gcc-sh$'} ${command}`,
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
 
-    let executable = command;
-    // Auto wrap bare expressions in print() for immediate REPL output
-    if (
-      !command.includes('print(') &&
-      !command.startsWith('def ') &&
-      !command.startsWith('class ') &&
-      !command.includes('=') &&
-      !command.startsWith('for ') &&
-      !command.startsWith('if ')
-    ) {
-      executable = `print(${command})`;
+    if (isRust) {
+      let executable = command;
+      if (!command.includes('fn main')) {
+        executable = `fn main() {\n    ${command};\n}`;
+      }
+      const result = await runRustCode(executable, 'repl.rs');
+      setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
+    } else {
+      let executable = command;
+      if (!command.includes('int main') && !command.includes('#include')) {
+        executable = `#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n\nint main(void) {\n    ${command};\n    return 0;\n}`;
+      }
+      const result = await runCCode(executable, 'repl.c');
+      setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
     }
-
-    const result = await runPythonCode(executable, 'repl.py');
-    setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
   };
 
-  // Delete File
+  // Splitter Handlers
+  const handleHorizontalDrag = (deltaY: number) => {
+    if (!rightContainerRef.current) return;
+    const totalHeight = rightContainerRef.current.clientHeight;
+    if (totalHeight <= 0) return;
+    const deltaPercent = (deltaY / totalHeight) * 100;
+    setEditorHeightPercent((prev) => Math.min(82, Math.max(18, prev + deltaPercent)));
+  };
+
+  // Multi-File Project Methods
+  const handleSelectFile = (file: FileNode) => {
+    if (file.isFolder) return;
+    setActiveFileId(file.id);
+    if (!openTabs.some((t) => t.fileId === file.id)) {
+      setOpenTabs((prev) => [
+        ...prev,
+        {
+          fileId: file.id,
+          name: file.name,
+          path: file.path,
+          isModified: false,
+        },
+      ]);
+    }
+  };
+
+  const handleCloseTab = (fileId: string) => {
+    const nextTabs = openTabs.filter((t) => t.fileId !== fileId);
+    setOpenTabs(nextTabs);
+    if (activeFileId === fileId && nextTabs.length > 0) {
+      setActiveFileId(nextTabs[nextTabs.length - 1].fileId);
+    }
+  };
+
+  const handleCreateFile = (name: string, isFolder: boolean, parentPath: string) => {
+    const newId = `file-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    const initialContent = '';
+
+    const newNode: FileNode = {
+      id: newId,
+      name,
+      path: parentPath ? `${parentPath}/${name}` : name,
+      isFolder,
+      content: initialContent,
+      children: isFolder ? [] : undefined,
+    };
+
+    if (!parentPath) {
+      setFiles((prev) => [...prev, newNode]);
+    } else {
+      const insertRecursive = (nodes: FileNode[]): FileNode[] => {
+        return nodes.map((node) => {
+          if (node.isFolder && (node.path === parentPath || node.name === parentPath)) {
+            return {
+              ...node,
+              children: [...(node.children || []), newNode],
+            };
+          }
+          if (node.children) {
+            return { ...node, children: insertRecursive(node.children) };
+          }
+          return node;
+        });
+      };
+      setFiles((prev) => insertRecursive(prev));
+    }
+
+    if (!isFolder) {
+      setActiveFileId(newId);
+      setOpenTabs((prev) => [
+        ...prev,
+        {
+          fileId: newId,
+          name,
+          path: newNode.path,
+          isModified: false,
+        },
+      ]);
+    }
+  };
+
   const handleDeleteFile = (fileId: string) => {
     const deleteRecursive = (nodes: FileNode[]): FileNode[] => {
       return nodes
-        .filter((n) => n.id !== fileId)
-        .map((n) => ({
-          ...n,
-          children: n.children ? deleteRecursive(n.children) : undefined,
+        .filter((node) => node.id !== fileId)
+        .map((node) => ({
+          ...node,
+          children: node.children ? deleteRecursive(node.children) : undefined,
         }));
     };
 
@@ -296,206 +446,59 @@ export default function App() {
     handleCloseTab(fileId);
   };
 
-  // Create New File or Folder
-  const handleCreateFile = (name: string, isFolder: boolean, parentPath: string) => {
-    const newPath = parentPath ? `${parentPath}/${name}` : name;
-    const newNode: FileNode = {
-      id: `file-${Date.now()}`,
-      name,
-      path: newPath,
-      isFolder,
-      content: isFolder ? undefined : `# Nouveau fichier ${name}\n`,
-      children: isFolder ? [] : undefined,
-      isOpen: true,
-    };
-
-    if (!parentPath) {
-      setFiles((prev) => [...prev, newNode]);
-    } else {
-      const insertRecursive = (nodes: FileNode[]): FileNode[] => {
-        return nodes.map((n) => {
-          if (n.path === parentPath && n.isFolder) {
-            return {
-              ...n,
-              children: [...(n.children || []), newNode],
-            };
-          }
-          if (n.children) {
-            return { ...n, children: insertRecursive(n.children) };
-          }
-          return n;
-        });
-      };
-      setFiles((prev) => insertRecursive(prev));
-    }
-
-    if (!isFolder) {
-      handleSelectFile(newNode);
-    }
-  };
-
-  // Load Python Templates
-  const handleLoadTemplate = (templateName: string) => {
-    let targetCode = '';
-    let targetFileName = '';
-
-    if (templateName === 'cli') {
-      targetFileName = 'cli_example.py';
-      targetCode = `# Démonstration Python CLI & Traitement de Données
-def main():
-    print("=== Analyse de Données & Statistiques Python ===")
-    
-    numbers = [84, 12, 45, 9, 32, 77, 2, 56]
-    print(f"Collection initiale : {numbers}")
-    
-    # Tri en place
-    sorted_nums = sorted(numbers)
-    print(f"Collection triée : {sorted_nums}")
-
-    # Filtrage par compréhension de liste
-    evens = [n for n in numbers if n % 2 == 0]
-    print(f"Nombres pairs : {evens}")
-
-    # Calculs statistiques built-ins
-    total = sum(numbers)
-    moyenne = total / len(numbers)
-    print(f"Somme cumulée : {total}")
-    print(f"Moyenne : {moyenne:.2f}")
-
-if __name__ == "__main__":
-    main()
-`;
-    } else if (templateName === 'async') {
-      targetFileName = 'async_example.py';
-      targetCode = `# Démonstration Asynchrone & Coroutines Python
-import time
-
-async def countdown(seconds: int):
-    print(f"Démarrage du compte à rebours ({seconds}s)...")
-    for i in range(seconds, 0, -1):
-        print(f"Tic-tac : {i}...")
-        await time.sleep(0.3)
-    print("✓ Compte à rebours terminé !")
-
-async def main():
-    print("=== Démarrage des Coroutines Asynchrones ===")
-    await countdown(4)
-
-if __name__ == "__main__":
-    main()
-`;
-    } else if (templateName === 'oop') {
-      targetFileName = 'oop_example.py';
-      targetCode = `# Programmation Orientée Objet & Héritage en Python
-class Person:
-    def __init__(self, name: str):
-        self.name = name
-
-    def describe(self) -> str:
-        return f"Personne : {self.name}"
-
-class Employee(Person):
-    def __init__(self, emp_id: str, name: str, role: str, base_salary: float):
-        super().__init__(name)
-        self.emp_id = emp_id
-        self.role = role
-        self.base_salary = base_salary
-
-    def describe(self) -> str:
-        return f"[{self.emp_id}] {self.name} — {self.role}"
-
-    def calculate_bonus(self, rate: float = 0.15) -> float:
-        return round(self.base_salary * rate, 2)
-
-def main():
-    print("=== Hiérarchie de Classes Python ===")
-    dev = Employee("EMP-01", "Sophie", "Python Architect", 72000.0)
-    print(dev.describe())
-    
-    bonus = dev.calculate_bonus()
-    print(f"Prime annuelle estimée : {bonus} €")
-
-if __name__ == "__main__":
-    main()
-`;
-    } else if (templateName === 'collections') {
-      targetFileName = 'collections_example.py';
-      targetCode = `# Manipulation de Collections, Dictionnaires et Ensembles en Python
-def main():
-    fruits = ["Pomme", "Banane", "Mangue", "Orange", "Pomme"]
-    print(f"Liste fruits : {fruits}")
-
-    # Élimination des doublons avec set
-    unique_fruits = set(fruits)
-    print(f"Ensemble unique : {unique_fruits}")
-
-    # Compréhension de dictionnaire {fruit: longueur}
-    lengths = {f: len(f) for f in unique_fruits}
-    print(f"Dictionnaire longueurs : {lengths}")
-
-    # Dictionnaire itération
-    for fruit, length in lengths.items():
-        print(f" - {fruit} mesure {length} lettres")
-
-if __name__ == "__main__":
-    main()
-`;
-    }
-
-    if (!targetCode) return;
-
-    // Add file or select if already exists
-    const existing = files.find((f) => f.name === targetFileName);
-    if (existing) {
-      handleCodeChange(targetCode);
-      handleSelectFile(existing);
-    } else {
-      const newFileNode: FileNode = {
-        id: `template-${Date.now()}`,
-        name: targetFileName,
-        path: targetFileName,
-        isFolder: false,
-        content: targetCode,
-      };
-      setFiles((prev) => [...prev, newFileNode]);
-      handleSelectFile(newFileNode);
-    }
-
-    setConsoleMessages((prev) => [
-      ...prev,
+  // Reset entire workspace to pristine blank project
+  const handleResetWorkspace = () => {
+    const blankFiles: FileNode[] = [
       {
-        id: `tmpl-${Date.now()}`,
-        type: 'info',
-        text: `Modèle Python chargé : ${targetFileName}`,
-        timestamp: new Date().toLocaleTimeString('fr-FR'),
+        id: 'file-main-rs',
+        name: 'main.rs',
+        path: 'main.rs',
+        isFolder: false,
+        content: '',
+      },
+    ];
+    setFiles(blankFiles);
+    setActiveFileId('file-main-rs');
+    setOpenTabs([
+      {
+        fileId: 'file-main-rs',
+        name: 'main.rs',
+        path: 'main.rs',
+        isModified: false,
       },
     ]);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(blankFiles));
+    } catch {
+      // ignore
+    }
   };
 
-  // Collect folder paths for New File Dialog
-  const existingFolders = useMemo(() => {
-    const folders: string[] = [];
-    const scan = (nodes: FileNode[]) => {
+  const allFolders = useMemo(() => {
+    const list: string[] = [];
+    const collect = (nodes: FileNode[]) => {
       for (const n of nodes) {
         if (n.isFolder) {
-          folders.push(n.path);
-          if (n.children) scan(n.children);
+          list.push(n.path);
+          if (n.children) collect(n.children);
         }
       }
     };
-    scan(files);
-    return folders;
+    collect(files);
+    return list;
   }, [files]);
 
   return (
     <div
-      className="flex flex-col h-screen w-screen overflow-hidden select-none font-sans"
+      className="flex flex-col h-screen w-screen overflow-hidden font-sans select-none antialiased"
       style={{
         backgroundColor: activeTheme.colors.appBg,
         color: activeTheme.colors.textPrimary,
       }}
     >
-      {/* 1. Top Header Bar */}
+      <OfflineIndicator />
+
+      {/* 1. Header (Brand, C / Rust Switcher, Theme, Run, Format) */}
       <Header
         activeTheme={activeTheme}
         onSelectTheme={handleSelectTheme}
@@ -504,29 +507,29 @@ if __name__ == "__main__":
         isRunning={isRunning}
         onFormatCode={handleFormatCode}
         diagnostics={diagnostics}
-        onOpenDiagnostics={handleDumpErrorExplanations}
+        onOpenDiagnostics={() => setMobileView('problems')}
         activeFilePath={activeFileNode?.path}
         isSidebarCollapsed={isSidebarCollapsed}
         onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+        activeLanguage={activeLanguage}
+        onSelectLanguage={handleSelectLanguage}
       />
 
-      {/* 2. Main Workspace (Sidebar + Editor + Console) */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Sidebar / Explorer (with collapse support) */}
+      {/* 2. Main IDE Workspace (Sidebar + Editor + Terminal) */}
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
         <Sidebar
           files={files}
           activeFileId={activeFileId}
           onSelectFile={handleSelectFile}
           onDeleteFile={handleDeleteFile}
           onOpenNewFileDialog={() => setNewFileDialogOpen(true)}
-          onLoadTemplate={handleLoadTemplate}
+          onResetWorkspace={handleResetWorkspace}
           activeTheme={activeTheme}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
         />
 
-        {/* Central Code Area */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden" ref={rightContainerRef}>
           {/* Tab Bar */}
           <TabBar
             tabs={openTabs}
@@ -536,14 +539,20 @@ if __name__ == "__main__":
             activeTheme={activeTheme}
           />
 
-          {/* Desktop/Tablet Split: Editor + Console stacked */}
-          {/* Mobile View: Switches between Editor and Console */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
             {/* Editor Container */}
             <div
-              className={`flex-1 flex flex-col overflow-hidden min-h-0 ${
+              className={`flex flex-col overflow-hidden min-h-0 ${
                 mobileView === 'editor' ? 'flex' : 'hidden md:flex'
               }`}
+              style={{
+                height:
+                  typeof window !== 'undefined' && window.innerWidth >= 768
+                    ? `${editorHeightPercent}%`
+                    : mobileView === 'editor'
+                    ? '100%'
+                    : '58%',
+              }}
             >
               {activeFileNode ? (
                 <CodeEditor
@@ -553,6 +562,7 @@ if __name__ == "__main__":
                   diagnostics={diagnostics}
                   jumpToLine={jumpToLine}
                   onJumpComplete={() => setJumpToLine(null)}
+                  language={activeLanguage}
                 />
               ) : (
                 <div
@@ -560,27 +570,54 @@ if __name__ == "__main__":
                   style={{ backgroundColor: activeTheme.colors.editorBg }}
                 >
                   <p className="text-sm opacity-60 mb-3">Aucun fichier sélectionné.</p>
-                  <button
-                    onClick={() => handleLoadTemplate('cli')}
-                    className="px-3.5 py-1.5 rounded text-xs font-semibold"
-                    style={{
-                      backgroundColor: activeTheme.colors.accent,
-                      color: activeTheme.colors.accentText,
-                    }}
-                  >
-                    Ouvrir un modèle Python
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleCreateFile('main.rs', false, '')}
+                      className="px-3.5 py-1.5 rounded text-xs font-semibold cursor-pointer"
+                      style={{
+                        backgroundColor: '#CE412B',
+                        color: '#FFFFFF',
+                      }}
+                    >
+                      Créer main.rs (Rust)
+                    </button>
+                    <button
+                      onClick={() => handleCreateFile('main.c', false, '')}
+                      className="px-3.5 py-1.5 rounded text-xs font-semibold cursor-pointer"
+                      style={{
+                        backgroundColor: '#00599C',
+                        color: '#FFFFFF',
+                      }}
+                    >
+                      Créer main.c (C)
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Bottom Terminal Console (Collapsible & Resizable) */}
+            {/* Horizontal Draggable Splitter */}
+            <div className="hidden md:block shrink-0">
+              <HorizontalSplitter
+                onDrag={handleHorizontalDrag}
+                activeTheme={activeTheme}
+                onReset={() => setEditorHeightPercent(58)}
+              />
+            </div>
+
+            {/* Bottom Terminal Console */}
             <div
-              className={`shrink-0 overflow-hidden ${
+              className={`flex flex-col min-h-0 overflow-hidden ${
                 mobileView === 'terminal' || mobileView === 'problems'
-                  ? 'flex-1 flex flex-col'
-                  : 'hidden md:flex flex-col'
+                  ? 'flex-1 flex'
+                  : 'hidden md:flex'
               }`}
+              style={{
+                height:
+                  typeof window !== 'undefined' && window.innerWidth >= 768
+                    ? `${100 - editorHeightPercent}%`
+                    : undefined,
+              }}
             >
               <TerminalConsole
                 messages={consoleMessages}
@@ -600,10 +637,10 @@ if __name__ == "__main__":
         </div>
       </div>
 
-      {/* 3. Mobile View Switcher Bottom Bar (Only on smartphones < md) */}
+      {/* 3. Mobile Navigation Bottom Bar */}
       <nav
         aria-label="Navigation mobile"
-        className="md:hidden shrink-0 border-t flex items-center justify-around py-2 px-3 z-30 shadow-lg select-none"
+        className="md:hidden shrink-0 border-t flex items-center justify-around py-2 px-2 z-30 shadow-lg select-none"
         style={{
           backgroundColor: activeTheme.colors.sidebarBg,
           borderColor: activeTheme.colors.border,
@@ -611,11 +648,12 @@ if __name__ == "__main__":
       >
         <button
           onClick={() => setMobileView('editor')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
             mobileView === 'editor' ? 'font-bold' : 'opacity-70'
           }`}
           style={{
-            color: mobileView === 'editor' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color:
+              mobileView === 'editor' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
           }}
         >
           <FileCode className="w-4 h-4" />
@@ -624,11 +662,12 @@ if __name__ == "__main__":
 
         <button
           onClick={() => setMobileView('terminal')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors ${
+          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
             mobileView === 'terminal' ? 'font-bold' : 'opacity-70'
           }`}
           style={{
-            color: mobileView === 'terminal' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color:
+              mobileView === 'terminal' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
           }}
         >
           <Terminal className="w-4 h-4" />
@@ -637,11 +676,12 @@ if __name__ == "__main__":
 
         <button
           onClick={() => setMobileView('problems')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors relative ${
+          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors relative cursor-pointer ${
             mobileView === 'problems' ? 'font-bold' : 'opacity-70'
           }`}
           style={{
-            color: mobileView === 'problems' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color:
+              mobileView === 'problems' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
           }}
         >
           <AlertCircle className="w-4 h-4" />
@@ -656,11 +696,12 @@ if __name__ == "__main__":
         <button
           onClick={handleRunCode}
           disabled={isRunning}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold transition-transform active:scale-95 disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold shadow-md cursor-pointer transition-transform active:scale-95 disabled:opacity-50"
           style={{
-            backgroundColor: activeTheme.colors.accent,
-            color: activeTheme.colors.accentText,
+            backgroundColor: activeLanguage === 'rust' ? '#CE412B' : activeTheme.colors.accent,
+            color: '#FFFFFF',
           }}
+          title="Compiler et exécuter"
         >
           {isRunning ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -671,28 +712,25 @@ if __name__ == "__main__":
         </button>
       </nav>
 
-      {/* Theme Picker Modal */}
-      <ThemeModal
-        isOpen={themeModalOpen}
-        onClose={() => setThemeModalOpen(false)}
-        activeTheme={activeTheme}
-        onSelectTheme={(t) => {
-          handleSelectTheme(t);
-          setThemeModalOpen(false);
-        }}
-      />
+      {/* 4. Modals */}
+      {themeModalOpen && (
+        <ThemeModal
+          isOpen={themeModalOpen}
+          activeTheme={activeTheme}
+          onSelectTheme={handleSelectTheme}
+          onClose={() => setThemeModalOpen(false)}
+        />
+      )}
 
-      {/* New File Dialog */}
-      <NewFileDialog
-        isOpen={newFileDialogOpen}
-        onClose={() => setNewFileDialogOpen(false)}
-        onCreate={handleCreateFile}
-        activeTheme={activeTheme}
-        folders={existingFolders}
-      />
-
-      {/* Offline Toast Indicator */}
-      <OfflineIndicator />
+      {newFileDialogOpen && (
+        <NewFileDialog
+          isOpen={newFileDialogOpen}
+          onClose={() => setNewFileDialogOpen(false)}
+          onCreate={handleCreateFile}
+          activeTheme={activeTheme}
+          folders={allFolders}
+        />
+      )}
     </div>
   );
 }

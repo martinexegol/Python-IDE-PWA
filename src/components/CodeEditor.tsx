@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { PythonTheme, PythonDiagnostic, CompletionItem } from '../types';
-import { tokenizePythonLine, Token } from '../python/syntax';
-import { calculateIndentGuides, getActiveIndentGuideLevel } from '../python/indentation';
-import { getCompletionsForQuery } from '../python/autocomplete';
+import { tokenizeCLine, Token } from '../c/syntax';
+import { tokenizeRustLine } from '../rust/syntax';
+import { calculateIndentGuides, getActiveIndentGuideLevel } from '../utils/indentation';
+import { getCCompletionsForQuery } from '../c/autocomplete';
+import { getRustCompletionsForQuery } from '../rust/autocomplete';
 import { AlertCircle, AlertTriangle, Sparkles, ChevronRight } from 'lucide-react';
 
 interface CodeEditorProps {
@@ -12,6 +14,7 @@ interface CodeEditorProps {
   diagnostics: PythonDiagnostic[];
   jumpToLine?: number | null;
   onJumpComplete?: () => void;
+  language?: 'c' | 'rust';
 }
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
@@ -21,6 +24,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   diagnostics,
   jumpToLine,
   onJumpComplete,
+  language = 'c',
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -90,11 +94,24 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     return map;
   }, [diagnostics]);
 
-  // Filter autocomplete candidates (including dynamically declared variables & functions)
+  // Find active error or warning to display visible suggestion
+  const activeDiagnostic = useMemo(() => {
+    return (
+      diagnostics.find((d) => d.line === cursorLine && d.severity === 'error') ||
+      diagnostics.find((d) => d.severity === 'error') ||
+      diagnostics.find((d) => d.line === cursorLine && d.severity === 'warning') ||
+      null
+    );
+  }, [diagnostics, cursorLine]);
+
+  // Filter autocomplete candidates for C or Rust
   const completions = useMemo(() => {
     if (!autocompleteOpen) return [];
-    return getCompletionsForQuery(autocompleteQuery, isAfterDot, code);
-  }, [autocompleteOpen, autocompleteQuery, isAfterDot, code]);
+    if (language === 'rust') {
+      return getRustCompletionsForQuery(autocompleteQuery, code);
+    }
+    return getCCompletionsForQuery(autocompleteQuery, code);
+  }, [autocompleteOpen, autocompleteQuery, code, language]);
 
   // Synchronize scroll between textarea and syntax highlight overlay
   const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
@@ -529,15 +546,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     updateCursorPosition(true);
   };
 
-  // Tokenize lines for rendering
+  // Tokenize lines for rendering in C (C99/C11) or Rust (2021)
   const tokenizedLines = useMemo(() => {
-    let inDocString: string | null = null;
+    let inBlockComment = false;
     return lines.map((line) => {
-      const { tokens, endedInDocString } = tokenizePythonLine(line, inDocString);
-      inDocString = endedInDocString;
-      return tokens;
+      const res = language === 'rust'
+        ? tokenizeRustLine(line, inBlockComment)
+        : tokenizeCLine(line, inBlockComment);
+      inBlockComment = res.inBlockComment;
+      return res.tokens;
     });
-  }, [lines]);
+  }, [lines, language]);
 
   const charWidthPx = 7.8; // monospace character width in JetBrains Mono 13px
 
@@ -573,12 +592,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             return (
               <div
                 key={lineNum}
-                className="h-[22px] flex items-center justify-end gap-1.5 relative group"
+                className={`h-[22px] flex items-center justify-end gap-1.5 relative group px-1 rounded-xs transition-colors ${
+                  hasError ? 'bg-red-500/25 text-red-400 font-bold' : ''
+                }`}
                 style={{
-                  color: isCur
+                  color: hasError
+                    ? '#f87171'
+                    : isCur
                     ? activeTheme.colors.editorLineNumberActive
                     : activeTheme.colors.editorLineNumber,
-                  fontWeight: isCur ? 'bold' : 'normal',
+                  fontWeight: isCur || hasError ? 'bold' : 'normal',
                 }}
               >
                 {/* Pulsing Red Dot in the Margin for Automatic Errors */}
@@ -617,7 +640,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
       {/* 2. Main Editor Area: Indent Guides + Syntax Tokens + Invisible Textarea */}
       <div className="relative flex-1 h-full overflow-hidden">
-        {/* Layer A: Active Line Highlight */}
+        {/* Layer A: Active Line Highlight & Visible Red Error Lines */}
         <div
           className="absolute left-0 right-0 pointer-events-none transition-all duration-75"
           style={{
@@ -627,6 +650,26 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             zIndex: 1,
           }}
         />
+
+        {/* Lignes en rouge très visibles pour chaque anomalie */}
+        {lines.map((_, lineIdx) => {
+          const lineNum = lineIdx + 1;
+          const lineDiags = diagnosticsByLine.get(lineNum);
+          const hasError = lineDiags?.some((d) => d.severity === 'error');
+          if (!hasError) return null;
+
+          return (
+            <div
+              key={`err-row-${lineIdx}`}
+              className="absolute left-0 right-0 pointer-events-none bg-red-500/20 border-l-4 border-red-500 shadow-[inset_0_0_10px_rgba(239,68,68,0.25)] transition-all duration-150"
+              style={{
+                top: `${lineIdx * 22 + 8}px`,
+                height: '22px',
+                zIndex: 1,
+              }}
+            />
+          );
+        })}
 
         {/* Layer B: Vertical Indent Guides & Syntax Highlighted Text */}
         <div
@@ -709,6 +752,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
         {/* Layer C: Interactive Textarea for Input */}
         <textarea
+          id="python-code-editor-textarea"
           ref={textareaRef}
           value={code}
           onChange={(e) => {
@@ -907,6 +951,69 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       </div>
     </div>
 
+    {/* Visible Error & Correction Suggestion Banner */}
+    {activeDiagnostic && (
+      <div
+        className="border-t px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shrink-0 select-text animate-in slide-in-from-bottom-2 duration-150 z-30"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderTopColor: activeDiagnostic.severity === 'error' ? '#ef4444' : '#f59e0b',
+        }}
+      >
+        <div className="flex items-start gap-2.5 min-w-0">
+          <div
+            className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 font-bold text-[11px] ${
+              activeDiagnostic.severity === 'error'
+                ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+            }`}
+          >
+            {activeDiagnostic.severity === 'error' ? '!' : 'i'}
+          </div>
+          <div className="min-w-0 space-y-0.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span
+                className={`font-bold ${
+                  activeDiagnostic.severity === 'error' ? 'text-red-400' : 'text-amber-400'
+                }`}
+              >
+                Ligne {activeDiagnostic.line} :
+              </span>
+              <span className="font-semibold">{activeDiagnostic.message}</span>
+            </div>
+            <div className="text-[11px] text-amber-200/90 flex items-start sm:items-center gap-1.5 flex-wrap">
+              <span className="font-semibold text-amber-400 shrink-0">💡 Suggestion de correction :</span>
+              <span>{activeDiagnostic.howToFix}</span>
+            </div>
+          </div>
+        </div>
+
+        {activeDiagnostic.suggestedCodeSnippet && (
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => {
+                const lineIdx = activeDiagnostic.line - 1;
+                const newLines = [...lines];
+                if (lineIdx >= 0 && lineIdx < newLines.length) {
+                  newLines[lineIdx] = activeDiagnostic.suggestedCodeSnippet!;
+                  onChange(newLines.join('\n'));
+                }
+              }}
+              className="px-2.5 py-1 rounded font-semibold text-[11px] flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
+              style={{
+                backgroundColor: activeDiagnostic.severity === 'error' ? '#ef4444' : activeTheme.colors.accent,
+                color: '#ffffff',
+              }}
+              title="Remplacer automatiquement la ligne par la correction suggérée"
+            >
+              <span>⚡ Appliquer la correction</span>
+            </button>
+          </div>
+        )}
+      </div>
+    )}
+
     {/* Mobile Ergonomic Quick Symbol Bar: fast Python typing for smartphones (phones only) */}
     <div
       className="md:hidden shrink-0 border-t flex items-center gap-1 px-2 py-1.5 overflow-x-auto select-none no-scrollbar shadow-inner"
@@ -925,7 +1032,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.textPrimary,
         }}
-        title="Indentation 4 espaces (PEP 8)"
+        title="Indentation 4 espaces"
       >
         Tab
       </button>
@@ -933,62 +1040,173 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertPair('f"', '"')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxInterpolation,
-        }}
-        title='f-string f"" avec curseur au milieu'
-      >
-        f""
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol(':')}
+        onClick={() => insertSymbol(';')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.accent,
         }}
-        title="Deux-points de bloc Python (:)"
+        title="Point-virgule (;)"
       >
-        :
+        ;
       </button>
 
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('# ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxComment,
-        }}
-        title="Commentaire Python (#)"
-      >
-        #
-      </button>
+      {language === 'rust' ? (
+        <>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('::')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Chemin / Scope (::)"
+          >
+            ::
+          </button>
 
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('def ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Mot-clé def"
-      >
-        def
-      </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('-> ')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Type de retour (->)"
+          >
+            -&gt;
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol(' => ')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxKeyword,
+            }}
+            title="Branche match (=>)"
+          >
+            =&gt;
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('&')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Emprunt / Référence (&)"
+          >
+            &
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('mut ')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxKeyword,
+            }}
+            title="Mutable (mut)"
+          >
+            mut
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('println!("{}");')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.accent,
+            }}
+            title="Macro println!()"
+          >
+            println!
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('*')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Pointeur / Déréférencement (*)"
+          >
+            *
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('&')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Adresse mémoire (&)"
+          >
+            &
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('->')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxOperator,
+            }}
+            title="Opérateur flèche structure (->)"
+          >
+            -&gt;
+          </button>
+
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSymbol('// ')}
+            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+            style={{
+              backgroundColor: activeTheme.colors.tabInactiveBg,
+              borderColor: activeTheme.colors.border,
+              color: activeTheme.colors.syntaxComment,
+            }}
+            title="Commentaire (//)"
+          >
+            //
+          </button>
+        </>
+      )}
 
       <button
         type="button"
@@ -1175,24 +1393,21 @@ function getTokenColor(token: Token, theme: PythonTheme): string {
     case 'type':
       return theme.colors.syntaxType;
     case 'string':
+    case 'char':
       return theme.colors.syntaxString;
-    case 'interpolation':
-      return theme.colors.syntaxInterpolation;
+    case 'preprocessor':
+      return theme.colors.syntaxAnnotation;
     case 'number':
       return theme.colors.syntaxNumber;
     case 'comment':
       return theme.colors.syntaxComment;
-    case 'doc-comment':
-      return theme.colors.syntaxDocComment;
     case 'function':
       return theme.colors.syntaxFunction;
-    case 'annotation':
-      return theme.colors.syntaxAnnotation;
     case 'operator':
       return theme.colors.syntaxOperator;
-    case 'constant':
-      return theme.colors.syntaxConstant;
-    case 'variable':
+    case 'punctuation':
+      return theme.colors.textSecondary;
+    case 'identifier':
       return theme.colors.syntaxVariable;
     default:
       return theme.colors.syntaxDefault;

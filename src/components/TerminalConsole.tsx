@@ -171,9 +171,8 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
 
   return (
     <div
-      className="relative border-t flex flex-col font-mono text-xs select-none transition-colors duration-150 flex-1 md:flex-initial shrink-0"
+      className="relative border-t flex flex-col font-mono text-xs select-none transition-colors duration-150 h-full w-full"
       style={{
-        height: typeof window !== 'undefined' && window.innerWidth < 768 ? '100%' : `${height}px`,
         backgroundColor: activeTheme.colors.consoleBg,
         borderColor: activeTheme.colors.border,
         color: activeTheme.colors.textPrimary,
@@ -250,7 +249,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
             }}
           >
             <CornerDownLeft className="w-3.5 h-3.5" />
-            <span>REPL Interactif</span>
+            <span>REPL</span>
           </button>
         </div>
 
@@ -276,7 +275,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
             onClick={onRerun}
             disabled={isRunning}
             className="p-1 rounded hover:opacity-75 transition-opacity disabled:opacity-40"
-            title="Relancer le programme Python (F5)"
+            title="Compiler et exécuter le programme C (F5)"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
           </button>
@@ -310,7 +309,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
           <div className="h-full overflow-y-auto p-3 space-y-1 font-mono text-[12px] leading-relaxed select-text">
             {messages.length === 0 ? (
               <div className="opacity-40 italic py-4 text-center select-none font-sans">
-                Console prête. Cliquez sur « Exécuter Python » ou pressez F5 pour lancer le programme.
+                Console prête. Cliquez sur « Compiler & Exécuter » ou pressez F5 pour lancer le programme C.
               </div>
             ) : (
               messages.map((msg) => {
@@ -351,7 +350,9 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
           <div className="h-full flex flex-col p-3">
             <div className="flex-1 overflow-y-auto space-y-1 font-mono text-[12px] select-text">
               <div className="opacity-60 italic text-xs mb-2 font-sans">
-                Entrez une expression Python pour l'évaluer instantanément (ex: `2 + 2`, `print("Hello Python!")`, `[x**2 for x in range(5)]`)
+                {fileName?.endsWith('.rs')
+                  ? 'Entrez une instruction Rust pour l\'évaluer (ex: println!("Total: {}", 21 * 2);)'
+                  : 'Entrez une instruction C pour l\'exécuter (ex: printf("Val: %d\\n", 42 * 2);)'}
               </div>
               {messages.map((msg) => (
                 <div key={msg.id} className="flex items-start gap-2">
@@ -376,14 +377,21 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
 
             {/* REPL Input Form */}
             <form onSubmit={handleReplSubmit} className="mt-2 flex items-center gap-2 pt-2 border-t" style={{ borderColor: activeTheme.colors.border }}>
-              <span className="font-bold" style={{ color: activeTheme.colors.accent }}>
-                python&gt;&gt;&gt;
+              <span
+                className="font-bold"
+                style={{ color: fileName?.endsWith('.rs') ? '#CE412B' : activeTheme.colors.accent }}
+              >
+                {fileName?.endsWith('.rs') ? 'rust-sh$>' : 'gcc-sh$>'}
               </span>
               <input
                 type="text"
                 value={replInput}
                 onChange={(e) => setReplInput(e.target.value)}
-                placeholder="Tapez une instruction Python (ex: print('Hello'), 2 + 2, len([1, 2, 3]))..."
+                placeholder={
+                  fileName?.endsWith('.rs')
+                    ? 'Tapez du code Rust (ex: println!("{}", 42);)...'
+                    : 'Tapez du code C (ex: printf("%d\\n", 42);)...'
+                }
                 className="flex-1 bg-transparent outline-none font-mono text-xs"
                 style={{ color: activeTheme.colors.textPrimary }}
               />
@@ -391,11 +399,11 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
                 type="submit"
                 className="px-2.5 py-1 rounded text-xs font-semibold"
                 style={{
-                  backgroundColor: activeTheme.colors.accent,
-                  color: activeTheme.colors.accentText,
+                  backgroundColor: fileName?.endsWith('.rs') ? '#CE412B' : activeTheme.colors.accent,
+                  color: '#FFFFFF',
                 }}
               >
-                Évaluer
+                Exécuter
               </button>
             </form>
           </div>
