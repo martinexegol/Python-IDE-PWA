@@ -27,7 +27,7 @@ export const TabBar: React.FC<TabBarProps> = ({
     >
       {tabs.map((tab) => {
         const isActive = tab.fileId === activeFileId;
-        const isPython = tab.name.endsWith('.py');
+        const isZig = tab.name.endsWith('.zig') || tab.name.endsWith('.zon');
 
         return (
           <div
@@ -45,10 +45,10 @@ export const TabBar: React.FC<TabBarProps> = ({
               color: isActive ? activeTheme.colors.textPrimary : activeTheme.colors.textSecondary,
             }}
           >
-            {isPython ? (
+            {isZig ? (
               <FileCode
                 className="w-3.5 h-3.5 shrink-0"
-                style={{ color: activeTheme.colors.accent }}
+                style={{ color: '#F7A41D' }}
               />
             ) : (
               <FileText className="w-3.5 h-3.5 shrink-0 opacity-60" />

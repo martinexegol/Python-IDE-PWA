@@ -1,6 +1,7 @@
 import { PythonTheme } from '../types';
+import { EXTENDED_THEMES } from './extendedThemes';
 
-export const THEMES: PythonTheme[] = [
+const BASE_THEMES: PythonTheme[] = [
   // --- MODES HAUT CONTRASTE (ACCESSIBILITÉ WCAG AAA) ---
   {
     id: 'high-contrast-dark',
@@ -1863,3 +1864,5 @@ export const THEMES: PythonTheme[] = [
     },
   },
 ];
+
+export const THEMES: PythonTheme[] = [...BASE_THEMES, ...EXTENDED_THEMES];

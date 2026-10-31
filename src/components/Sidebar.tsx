@@ -93,8 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
 
       const isActive = activeFileId === node.id;
-      const isRust = node.name.endsWith('.rs');
-      const isC = node.name.endsWith('.c') || node.name.endsWith('.h');
+      const isZig = node.name.endsWith('.zig') || node.name.endsWith('.zon');
 
       return (
         <div
@@ -115,15 +114,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
         >
           <div className="flex items-center gap-1.5 min-w-0">
-            {isRust ? (
+            {isZig ? (
               <FileCode
                 className="w-3.5 h-3.5 shrink-0"
-                style={{ color: '#CE412B' }}
-              />
-            ) : isC ? (
-              <FileCode
-                className="w-3.5 h-3.5 shrink-0"
-                style={{ color: '#00599C' }}
+                style={{ color: '#F7A41D' }}
               />
             ) : (
               <FileText className="w-3.5 h-3.5 shrink-0 opacity-60" />
@@ -180,7 +174,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           onClick={onOpenNewFileDialog}
           className="p-2 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors mb-2 cursor-pointer"
-          title="Nouveau fichier (C / Rust)"
+          title="Nouveau fichier (C)"
         >
           <Plus className="w-4 h-4" />
         </button>
@@ -258,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Workspace Header */}
       <div className="px-3 py-1.5 font-semibold text-[11px] opacity-60 uppercase tracking-wider flex items-center justify-between">
-        <span>workspace (c & rust)</span>
+        <span>workspace (c)</span>
       </div>
 
       {/* File Tree */}

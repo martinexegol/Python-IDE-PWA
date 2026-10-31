@@ -1,6 +1,6 @@
 /**
  * Indentation & Vertical Indent Guides Calculation.
- * Standard 4-space indentation for C and Rust.
+ * Standard 4-space indentation for C.
  */
 
 export interface LineIndentInfo {

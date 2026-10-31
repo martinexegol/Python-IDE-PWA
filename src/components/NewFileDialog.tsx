@@ -34,14 +34,12 @@ export const NewFileDialog: React.FC<NewFileDialogProps> = ({
 
     if (
       !isFolder &&
-      !clean.endsWith('.c') &&
-      !clean.endsWith('.h') &&
-      !clean.endsWith('.rs') &&
-      !clean.endsWith('.toml') &&
+      !clean.endsWith('.zig') &&
+      !clean.endsWith('.zon') &&
       !clean.endsWith('.txt') &&
       !clean.endsWith('.md')
     ) {
-      setError('Extensions acceptées : .c, .h, .rs, .toml, .txt, .md');
+      setError('Extensions acceptées : .zig, .zon, .txt, .md');
       return;
     }
 
@@ -65,7 +63,7 @@ export const NewFileDialog: React.FC<NewFileDialogProps> = ({
           <div className="flex items-center gap-2">
             {isFolder ? <FolderPlus className="w-5 h-5 text-amber-400" /> : <FileCode2 className="w-5 h-5" style={{ color: activeTheme.colors.accent }} />}
             <h3 className="font-bold text-base">
-              {isFolder ? 'Nouveau dossier' : 'Nouveau fichier (C ou Rust)'}
+              {isFolder ? 'Nouveau dossier' : 'Nouveau fichier (C)'}
             </h3>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:opacity-75">
@@ -83,7 +81,7 @@ export const NewFileDialog: React.FC<NewFileDialogProps> = ({
                 onChange={() => setIsFolder(false)}
                 className="accent-cyan-500"
               />
-              <span>Fichier (.c, .h, .rs)</span>
+              <span>Fichier (.zig, .zon)</span>
             </label>
             <label className="flex items-center gap-2 text-xs cursor-pointer">
               <input
@@ -122,7 +120,7 @@ export const NewFileDialog: React.FC<NewFileDialogProps> = ({
 
           <div>
             <label className="block text-xs font-medium mb-1 opacity-80">
-              {isFolder ? 'Nom du dossier :' : 'Nom du fichier (ex: main.rs, helper.c) :'}
+              {isFolder ? 'Nom du dossier :' : 'Nom du fichier (ex: main.zig, utils.zig) :'}
             </label>
             <input
               type="text"
@@ -132,7 +130,7 @@ export const NewFileDialog: React.FC<NewFileDialogProps> = ({
                 setName(e.target.value);
                 setError('');
               }}
-              placeholder={isFolder ? 'src' : 'main.rs'}
+              placeholder={isFolder ? 'src' : 'main.zig'}
               className="w-full text-xs p-2 rounded border outline-none font-mono"
               style={{
                 backgroundColor: activeTheme.colors.editorBg,

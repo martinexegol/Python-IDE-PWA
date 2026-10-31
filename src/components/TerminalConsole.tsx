@@ -21,6 +21,7 @@ interface TerminalConsoleProps {
   isRunning: boolean;
   diagnostics: PythonDiagnostic[];
   onSelectProblem: (diagnostic: PythonDiagnostic) => void;
+  onApplyFix?: (diagnostic: PythonDiagnostic) => void;
   activeTheme: PythonTheme;
   fileName?: string;
   onExecuteRepl: (cmd: string) => void;
@@ -35,6 +36,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
   isRunning,
   diagnostics,
   onSelectProblem,
+  onApplyFix,
   activeTheme,
   fileName,
   onExecuteRepl,
@@ -275,7 +277,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
             onClick={onRerun}
             disabled={isRunning}
             className="p-1 rounded hover:opacity-75 transition-opacity disabled:opacity-40"
-            title="Compiler et exécuter le programme C (F5)"
+            title="Compiler et exécuter le programme Zig (F5)"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
           </button>
@@ -341,6 +343,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
           <ProblemsPanel
             diagnostics={diagnostics}
             onSelectProblem={onSelectProblem}
+            onApplyFix={onApplyFix}
             activeTheme={activeTheme}
             fileName={fileName}
           />
@@ -350,9 +353,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
           <div className="h-full flex flex-col p-3">
             <div className="flex-1 overflow-y-auto space-y-1 font-mono text-[12px] select-text">
               <div className="opacity-60 italic text-xs mb-2 font-sans">
-                {fileName?.endsWith('.rs')
-                  ? 'Entrez une instruction Rust pour l\'évaluer (ex: println!("Total: {}", 21 * 2);)'
-                  : 'Entrez une instruction C pour l\'exécuter (ex: printf("Val: %d\\n", 42 * 2);)'}
+                Entrez une instruction Zig pour l'exécuter (ex: std.debug.print("Val: {}\\n", .{42 * 2});)
               </div>
               {messages.map((msg) => (
                 <div key={msg.id} className="flex items-start gap-2">
@@ -378,29 +379,25 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
             {/* REPL Input Form */}
             <form onSubmit={handleReplSubmit} className="mt-2 flex items-center gap-2 pt-2 border-t" style={{ borderColor: activeTheme.colors.border }}>
               <span
-                className="font-bold"
-                style={{ color: fileName?.endsWith('.rs') ? '#CE412B' : activeTheme.colors.accent }}
+                className="font-bold font-mono"
+                style={{ color: activeTheme.colors.accent }}
               >
-                {fileName?.endsWith('.rs') ? 'rust-sh$>' : 'gcc-sh$>'}
+                zig-sh$&gt;
               </span>
               <input
                 type="text"
                 value={replInput}
                 onChange={(e) => setReplInput(e.target.value)}
-                placeholder={
-                  fileName?.endsWith('.rs')
-                    ? 'Tapez du code Rust (ex: println!("{}", 42);)...'
-                    : 'Tapez du code C (ex: printf("%d\\n", 42);)...'
-                }
+                placeholder='Tapez du code Zig (ex: std.debug.print("Val: {}\\n", .{42});)...'
                 className="flex-1 bg-transparent outline-none font-mono text-xs"
                 style={{ color: activeTheme.colors.textPrimary }}
               />
               <button
                 type="submit"
-                className="px-2.5 py-1 rounded text-xs font-semibold"
+                className="px-2.5 py-1 rounded text-xs font-semibold cursor-pointer"
                 style={{
-                  backgroundColor: fileName?.endsWith('.rs') ? '#CE412B' : activeTheme.colors.accent,
-                  color: '#FFFFFF',
+                  backgroundColor: activeTheme.colors.accent,
+                  color: activeTheme.colors.accentText,
                 }}
               >
                 Exécuter

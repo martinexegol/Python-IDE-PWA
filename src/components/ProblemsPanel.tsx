@@ -1,10 +1,21 @@
 import React, { useState } from 'react';
 import { PythonDiagnostic, PythonTheme } from '../types';
-import { AlertCircle, AlertTriangle, Info, CheckCircle2, ChevronRight, ChevronDown, Wrench, HelpCircle } from 'lucide-react';
+import {
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  CheckCircle2,
+  ChevronRight,
+  ChevronDown,
+  Wrench,
+  HelpCircle,
+  Zap,
+} from 'lucide-react';
 
 interface ProblemsPanelProps {
   diagnostics: PythonDiagnostic[];
   onSelectProblem: (diagnostic: PythonDiagnostic) => void;
+  onApplyFix?: (diagnostic: PythonDiagnostic) => void;
   activeTheme: PythonTheme;
   fileName?: string;
 }
@@ -12,8 +23,9 @@ interface ProblemsPanelProps {
 export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
   diagnostics,
   onSelectProblem,
+  onApplyFix,
   activeTheme,
-  fileName = 'main.c',
+  fileName = 'main.zig',
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -24,6 +36,24 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
   const toggleExpand = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedId((prev) => (prev === id ? null : id));
+  };
+
+  const getRiskBadge = (code?: string) => {
+    switch (code) {
+      case 'memory_leak':
+      case 'gpa_missing_deinit':
+        return { label: 'FUITE MÉMOIRE', bg: '#ef4444', text: '#ffffff' };
+      case 'double_free':
+        return { label: 'DOUBLE FREE', bg: '#dc2626', text: '#ffffff' };
+      case 'unhandled_error_union':
+        return { label: 'ERREUR NON GÉRÉE', bg: '#f97316', text: '#ffffff' };
+      case 'missing_std_import':
+        return { label: 'IMPORT MANQUANT', bg: '#e11d48', text: '#ffffff' };
+      case 'division_by_zero':
+        return { label: 'DIVISION / 0', bg: '#e11d48', text: '#ffffff' };
+      default:
+        return null;
+    }
   };
 
   return (
@@ -41,7 +71,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
       >
         <div className="flex items-center gap-3">
           <span className="font-semibold uppercase tracking-wider opacity-75">
-            Diagnostic du Compilateur ({fileName.endsWith('.rs') ? 'rustc 1.78' : 'GCC 13.2'})
+            Diagnostic & Analyse Mémoire (Zig 0.13.0)
           </span>
           <div className="flex items-center gap-2">
             <span
@@ -77,9 +107,9 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
         {diagnostics.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 opacity-70 gap-2">
             <CheckCircle2 className="w-8 h-8 text-emerald-500" />
-            <p className="text-sm font-sans">Aucun problème détecté.</p>
+            <p className="text-sm font-sans font-semibold">Aucun problème ni fuite de mémoire détecté.</p>
             <p className="text-[11px] opacity-60 font-sans">
-              Le code source {fileName.endsWith('.rs') ? 'Rust' : 'C'} est conforme et prêt à être compilé sans erreur.
+              Le code source Zig respecte les contraintes du compilateur, la gestion d'erreurs et les allocations mémoire (GPA).
             </p>
           </div>
         ) : (
@@ -87,6 +117,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
             const isError = diag.severity === 'error';
             const isWarning = diag.severity === 'warning';
             const isExpanded = expandedId === diag.id;
+            const riskBadge = getRiskBadge(diag.code);
 
             return (
               <div
@@ -125,7 +156,17 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
                         <span className="font-semibold text-xs text-rose-400">
                           {diag.message}
                         </span>
-                        {diag.code && (
+
+                        {riskBadge && (
+                          <span
+                            className="text-[9px] px-1.5 py-0.2 rounded font-mono font-bold tracking-wider"
+                            style={{ backgroundColor: riskBadge.bg, color: riskBadge.text }}
+                          >
+                            {riskBadge.label}
+                          </span>
+                        )}
+
+                        {diag.code && !riskBadge && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded border opacity-60">
                             {diag.code}
                           </span>
@@ -137,29 +178,34 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* Toggle Explanation Button */}
-                  <button
-                    onClick={(e) => toggleExpand(diag.id, e)}
-                    className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 shrink-0 opacity-70 hover:opacity-100 flex items-center gap-1 text-[11px] font-sans"
-                    title={isExpanded ? 'Masquer l\'explication' : 'Voir pourquoi et comment réparer'}
-                  >
-                    <span>{isExpanded ? 'Réduire' : 'Explication & Solution'}</span>
-                    {isExpanded ? (
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    ) : (
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    )}
-                  </button>
+                  {/* Actions Right */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={(e) => toggleExpand(diag.id, e)}
+                      className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 opacity-70 hover:opacity-100 flex items-center gap-1 text-[11px] font-sans cursor-pointer"
+                      title={isExpanded ? "Masquer l'explication" : 'Voir pourquoi et comment réparer'}
+                    >
+                      <span>{isExpanded ? 'Réduire' : 'Explication & Solution'}</span>
+                      {isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Expanded Pedagogical Explanation */}
                 {isExpanded && (
-                  <div className="mt-3 pt-2.5 border-t space-y-2 text-xs font-sans animate-in fade-in-50 duration-100" style={{ borderColor: activeTheme.colors.border }}>
-                    {/* Pourquoi c'est une erreur */}
+                  <div
+                    className="mt-3 pt-2.5 border-t space-y-2 text-xs font-sans animate-in fade-in-50 duration-100"
+                    style={{ borderColor: activeTheme.colors.border }}
+                  >
+                    {/* Pourquoi c'est une anomalie */}
                     <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/20">
                       <div className="flex items-center gap-1.5 font-bold text-[11px] text-amber-400 mb-1">
                         <HelpCircle className="w-3.5 h-3.5" />
-                        <span>Pourquoi c'est une erreur Python :</span>
+                        <span>Pourquoi c'est une anomalie / un risque en Zig :</span>
                       </div>
                       <p className="text-[11px] leading-relaxed opacity-90">
                         {diag.whyExplanation}
@@ -168,17 +214,40 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
 
                     {/* Comment la réparer */}
                     <div className="p-2.5 rounded bg-emerald-500/10 border border-emerald-500/20">
-                      <div className="flex items-center gap-1.5 font-bold text-[11px] text-emerald-400 mb-1">
-                        <Wrench className="w-3.5 h-3.5" />
-                        <span>Comment la réparer :</span>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-1.5 font-bold text-[11px] text-emerald-400">
+                          <Wrench className="w-3.5 h-3.5" />
+                          <span>Comment la réparer :</span>
+                        </div>
+
+                        {onApplyFix && diag.suggestedCodeSnippet && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onApplyFix(diag);
+                            }}
+                            className="px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 shadow-xs cursor-pointer active:scale-95 transition-transform"
+                            style={{
+                              backgroundColor: activeTheme.colors.accent,
+                              color: activeTheme.colors.accentText,
+                            }}
+                            title="Appliquer cette correction directement dans le code source"
+                          >
+                            <Zap className="w-3 h-3 fill-current" />
+                            <span>Appliquer la correction</span>
+                          </button>
+                        )}
                       </div>
+
                       <p className="text-[11px] leading-relaxed opacity-90 mb-1.5">
                         {diag.howToFix}
                       </p>
+
                       {diag.suggestedCodeSnippet && (
                         <div>
                           <span className="text-[10px] opacity-75 font-semibold block mb-0.5">
-                            Exemple de syntaxe correcte :
+                            Code de correction suggéré :
                           </span>
                           <pre className="font-mono text-[11px] p-2 rounded bg-black/30 text-emerald-300 overflow-x-auto whitespace-pre">
                             {diag.suggestedCodeSnippet}

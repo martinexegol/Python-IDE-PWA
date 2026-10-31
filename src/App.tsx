@@ -2,10 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { THEMES } from './themes';
 import { DEFAULT_WORKSPACE_FILES } from './defaultWorkspace';
 import { PythonTheme, FileNode, TabItem, PythonDiagnostic, ConsoleMessage } from './types';
-import { lintCCode, formatCCode } from './c/linter';
-import { runCCode } from './c/runner';
-import { lintRustCode, formatRustCode } from './rust/linter';
-import { runRustCode } from './rust/runner';
+import { lintZigCode, formatZigCode } from './zig/linter';
+import { runZigCode } from './zig/runner';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
@@ -35,20 +33,20 @@ export default function App() {
     return THEMES[3]; // One Dark Pro
   });
 
-  // 2. Active Language state ('rust' | 'c')
-  const [activeLanguage, setActiveLanguage] = useState<'rust' | 'c'>(() => {
-    const saved = localStorage.getItem('ide_active_language');
-    return saved === 'c' ? 'c' : 'rust';
-  });
-
-  // 3. Multi-File Project State
-  const STORAGE_KEY = 'ide_crust_workspace_v1';
+  // 2. Multi-File Project State
+  const STORAGE_KEY = 'ide_zig_workspace_v1';
 
   const [files, setFiles] = useState<FileNode[]>(() => {
-    // Purge legacy storage keys containing example / demo files
+    // Purge legacy storage keys containing example / demo files or old workspaces
     try {
-      localStorage.removeItem('ide_workspace_files');
-      localStorage.removeItem('ide_active_course_lesson');
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('ide_') && k !== STORAGE_KEY && k !== 'ide_studio_theme') {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
     } catch {
       // ignore
     }
@@ -61,9 +59,7 @@ export default function App() {
           const hasOldDemoCode = parsed.some(
             (f: any) =>
               typeof f.content === 'string' &&
-              (f.content.includes('Hello from Rust') ||
-                f.content.includes('Hello from C') ||
-                f.content.includes('SensorData') ||
+              (f.content.includes('SensorData') ||
                 f.content.includes('pointers_demo') ||
                 f.content.includes('PowerSupply'))
           );
@@ -78,56 +74,65 @@ export default function App() {
     return DEFAULT_WORKSPACE_FILES;
   });
 
-  const [activeFileId, setActiveFileId] = useState<string>('file-main-rs');
+  const [activeFileId, setActiveFileId] = useState<string>('file-main-zig');
 
   const [openTabs, setOpenTabs] = useState<TabItem[]>([
     {
-      fileId: 'file-main-rs',
-      name: 'main.rs',
-      path: 'main.rs',
+      fileId: 'file-main-zig',
+      name: 'main.zig',
+      path: 'main.zig',
       isModified: false,
     },
   ]);
 
-  // 4. Console & Execution state
+  // 3. Console & Execution state
   const [consoleMessages, setConsoleMessages] = useState<ConsoleMessage[]>([
     {
       id: 'init-msg-1',
       type: 'system',
-      text: 'Compilateurs prêts • rustc 1.78.0 (Rust 2021) & GCC 13.2.0 (C11)',
+      text: 'Compilateur Zig 0.13.0 prêt',
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     },
   ]);
   const [isRunning, setIsRunning] = useState<boolean>(false);
 
-  // 5. Layout & Splitter State
+  // 4. Layout & Splitter State
   const [editorHeightPercent, setEditorHeightPercent] = useState<number>(58);
   const rightContainerRef = useRef<HTMLDivElement>(null);
   const [mobileView, setMobileView] = useState<'editor' | 'terminal' | 'problems'>('editor');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
 
-  // 6. Modals
+  // 5. Modals
   const [themeModalOpen, setThemeModalOpen] = useState(false);
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
   const [jumpToLine, setJumpToLine] = useState<number | null>(null);
 
-  // Sync files to localStorage
+  // Save files to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
-    } catch {
-      // ignore storage overflow
+    } catch (e) {
+      console.warn('Erreur de sauvegarde locale :', e);
     }
   }, [files]);
 
-  // Find active file node
-  const findFileNode = useCallback(
-    (nodes: FileNode[], targetId: string): FileNode | null => {
+  // Save selected theme to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('ide_studio_theme', activeTheme.id);
+    } catch (e) {
+      console.warn('Erreur sauvegarde thème :', e);
+    }
+  }, [activeTheme]);
+
+  // Locate active file in tree
+  const findFileById = useCallback(
+    (nodes: FileNode[], id: string): FileNode | null => {
       for (const node of nodes) {
-        if (node.id === targetId) return node;
+        if (node.id === id) return node;
         if (node.children) {
-          const res = findFileNode(node.children, targetId);
-          if (res) return res;
+          const found = findFileById(node.children, id);
+          if (found) return found;
         }
       }
       return null;
@@ -135,100 +140,44 @@ export default function App() {
     []
   );
 
-  const activeFileNode = useMemo(
-    () => findFileNode(files, activeFileId),
-    [files, activeFileId, findFileNode]
-  );
-
-  // Auto-detect active language based on current file extension
-  useEffect(() => {
-    if (activeFileNode) {
-      if (activeFileNode.name.endsWith('.rs')) {
-        setActiveLanguage('rust');
-        localStorage.setItem('ide_active_language', 'rust');
-      } else if (activeFileNode.name.endsWith('.c') || activeFileNode.name.endsWith('.h')) {
-        setActiveLanguage('c');
-        localStorage.setItem('ide_active_language', 'c');
-      }
-    }
-  }, [activeFileNode]);
+  const activeFileNode = useMemo(() => {
+    return findFileById(files, activeFileId);
+  }, [files, activeFileId, findFileById]);
 
   const activeCode = activeFileNode?.content ?? '';
 
-  // Live compiler diagnostics for active code
+  // Synchronous static analysis (Zig Linter & Memory Diagnostics)
   const diagnostics: PythonDiagnostic[] = useMemo(() => {
-    if (activeLanguage === 'rust') {
-      return lintRustCode(activeCode);
-    }
-    return lintCCode(activeCode);
-  }, [activeCode, activeLanguage]);
-
-  // Save selected theme
-  const handleSelectTheme = (theme: PythonTheme) => {
-    setActiveTheme(theme);
-    localStorage.setItem('ide_studio_theme', theme.id);
-  };
-
-  // Switch language explicitly
-  const handleSelectLanguage = (lang: 'c' | 'rust') => {
-    setActiveLanguage(lang);
-    localStorage.setItem('ide_active_language', lang);
-
-    // Switch active tab to matching starter file if available
-    const targetFile = files.find((f) => lang === 'rust' ? f.name.endsWith('.rs') : f.name.endsWith('.c'));
-    if (targetFile) {
-      setActiveFileId(targetFile.id);
-      if (!openTabs.some((t) => t.fileId === targetFile.id)) {
-        setOpenTabs((prev) => [
-          ...prev,
-          {
-            fileId: targetFile.id,
-            name: targetFile.name,
-            path: targetFile.path,
-            isModified: false,
-          },
-        ]);
-      }
-    }
-
-    setConsoleMessages((prev) => [
-      ...prev,
-      {
-        id: `lang-switch-${Date.now()}`,
-        type: 'info',
-        text: `Langage actif : ${lang === 'rust' ? 'Rust (rustc 1.78 / Édition 2021)' : 'C (GCC 13.2 / C11 standard)'}`,
-        timestamp: new Date().toLocaleTimeString('fr-FR'),
-      },
-    ]);
-  };
+    if (!activeFileNode || activeFileNode.isFolder) return [];
+    if (!activeFileNode.name.endsWith('.zig')) return [];
+    return lintZigCode(activeCode);
+  }, [activeFileNode, activeCode]);
 
   // Code change handler
-  const handleCodeChange = (newCode: string) => {
-    const updateRecursive = (nodes: FileNode[]): FileNode[] => {
-      return nodes.map((node) => {
-        if (node.id === activeFileId) {
-          return { ...node, content: newCode };
-        }
-        if (node.children) {
-          return { ...node, children: updateRecursive(node.children) };
-        }
-        return node;
+  const handleCodeChange = useCallback(
+    (newCode: string) => {
+      setFiles((prevFiles) => {
+        const updateRecursive = (nodes: FileNode[]): FileNode[] => {
+          return nodes.map((node) => {
+            if (node.id === activeFileId) {
+              return { ...node, content: newCode };
+            }
+            if (node.children) {
+              return { ...node, children: updateRecursive(node.children) };
+            }
+            return node;
+          });
+        };
+        return updateRecursive(prevFiles);
       });
-    };
 
-    setFiles((prev) => updateRecursive(prev));
-    setOpenTabs((prev) =>
-      prev.map((t) => (t.fileId === activeFileId ? { ...t, isModified: true } : t))
-    );
-  };
-
-  // Jump from Diagnostics to specific line in editor
-  const handleSelectProblem = (diag: PythonDiagnostic) => {
-    setJumpToLine(diag.line);
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setMobileView('editor');
-    }
-  };
+      // Mark tab as modified
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.fileId === activeFileId ? { ...t, isModified: true } : t))
+      );
+    },
+    [activeFileId]
+  );
 
   // Dump detailed error report to terminal console
   const handleDumpErrorExplanations = useCallback(() => {
@@ -245,7 +194,7 @@ export default function App() {
       {
         id: `diag-title-${Date.now()}`,
         type: 'stderr',
-        text: `⚠️ Rapport du Compilateur ${activeLanguage === 'rust' ? 'Rust (rustc)' : 'C (GCC)'} : ${diagnostics.length} anomalie(s) détectée(s) :`,
+        text: `⚠️ Rapport du Compilateur Zig (zig 0.13.0) : ${diagnostics.length} anomalie(s) détectée(s) :`,
         timestamp: timeStr,
       },
     ];
@@ -269,9 +218,36 @@ export default function App() {
     });
 
     setConsoleMessages((prev) => [...prev, ...newLogs]);
-  }, [diagnostics, activeLanguage]);
+  }, [diagnostics]);
 
-  // Execute current code (Rust or C)
+  // Apply 1-click automatic fix for diagnostic
+  const handleApplyFix = (diag: PythonDiagnostic) => {
+    if (!diag.suggestedCodeSnippet) return;
+
+    if (diag.code === 'missing_std_import') {
+      handleCodeChange(`${diag.suggestedCodeSnippet}${activeCode}`);
+      return;
+    }
+
+    const curLines = activeCode.split('\n');
+
+    if (diag.code === 'memory_leak') {
+      const allocLine = diag.line;
+      if (allocLine <= curLines.length) {
+        curLines.splice(allocLine, 0, `    ${diag.suggestedCodeSnippet}`);
+        handleCodeChange(curLines.join('\n'));
+        return;
+      }
+    }
+
+    const lineIdx = diag.line - 1;
+    if (lineIdx >= 0 && lineIdx < curLines.length) {
+      curLines[lineIdx] = diag.suggestedCodeSnippet;
+      handleCodeChange(curLines.join('\n'));
+    }
+  };
+
+  // Execute current Zig code
   const handleRunCode = async () => {
     const compileErrors = diagnostics.filter((d) => d.severity === 'error');
     if (compileErrors.length > 0) {
@@ -287,34 +263,22 @@ export default function App() {
     }
 
     setIsRunning(true);
-    const fileName = activeFileNode?.name || (activeLanguage === 'rust' ? 'main.rs' : 'main.c');
-
-    if (activeLanguage === 'rust' || fileName.endsWith('.rs')) {
-      const result = await runRustCode(activeCode, fileName);
-      setConsoleMessages((prev) => [...prev, ...result.messages]);
-    } else {
-      const result = await runCCode(activeCode, fileName);
-      setConsoleMessages((prev) => [...prev, ...result.messages]);
-    }
-
+    const fileName = activeFileNode?.name || 'main.zig';
+    const result = await runZigCode(activeCode, fileName);
+    setConsoleMessages((prev) => [...prev, ...result.messages]);
     setIsRunning(false);
   };
 
-  // Format Code (Rust or C)
+  // Format Code (Zig standard, 4 spaces)
   const handleFormatCode = () => {
-    let formatted = activeCode;
-    if (activeLanguage === 'rust' || activeFileNode?.name.endsWith('.rs')) {
-      formatted = formatRustCode(activeCode);
-    } else {
-      formatted = formatCCode(activeCode);
-    }
+    const formatted = formatZigCode(activeCode);
     handleCodeChange(formatted);
     setConsoleMessages((prev) => [
       ...prev,
       {
         id: `fmt-${Date.now()}`,
         type: 'info',
-        text: `Code formaté (${activeLanguage === 'rust' ? 'Rust 4 espaces' : 'C standard 4 espaces'}).`,
+        text: 'Code formaté (Zig standard, 4 espaces).',
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
@@ -322,33 +286,22 @@ export default function App() {
 
   // REPL interactive command evaluation
   const handleExecuteRepl = async (command: string) => {
-    const isRust = activeLanguage === 'rust' || activeFileNode?.name.endsWith('.rs');
-
     setConsoleMessages((prev) => [
       ...prev,
       {
         id: `repl-in-${Date.now()}`,
         type: 'system',
-        text: `${isRust ? 'rust-sh$' : 'gcc-sh$'} ${command}`,
+        text: `zig-sh$ ${command}`,
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
 
-    if (isRust) {
-      let executable = command;
-      if (!command.includes('fn main')) {
-        executable = `fn main() {\n    ${command};\n}`;
-      }
-      const result = await runRustCode(executable, 'repl.rs');
-      setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
-    } else {
-      let executable = command;
-      if (!command.includes('int main') && !command.includes('#include')) {
-        executable = `#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n\nint main(void) {\n    ${command};\n    return 0;\n}`;
-      }
-      const result = await runCCode(executable, 'repl.c');
-      setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
+    let executable = command;
+    if (!command.includes('pub fn main') && !command.includes('@import')) {
+      executable = `const std = @import("std");\n\npub fn main() !void {\n    ${command};\n}`;
     }
+    const result = await runZigCode(executable, 'repl.zig');
+    setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
   };
 
   // Splitter Handlers
@@ -425,7 +378,7 @@ export default function App() {
         {
           fileId: newId,
           name,
-          path: newNode.path,
+          path: parentPath ? `${parentPath}/${name}` : name,
           isModified: false,
         },
       ]);
@@ -435,10 +388,10 @@ export default function App() {
   const handleDeleteFile = (fileId: string) => {
     const deleteRecursive = (nodes: FileNode[]): FileNode[] => {
       return nodes
-        .filter((node) => node.id !== fileId)
-        .map((node) => ({
-          ...node,
-          children: node.children ? deleteRecursive(node.children) : undefined,
+        .filter((n) => n.id !== fileId)
+        .map((n) => ({
+          ...n,
+          children: n.children ? deleteRecursive(n.children) : undefined,
         }));
     };
 
@@ -446,62 +399,45 @@ export default function App() {
     handleCloseTab(fileId);
   };
 
-  // Reset entire workspace to pristine blank project
   const handleResetWorkspace = () => {
-    const blankFiles: FileNode[] = [
-      {
-        id: 'file-main-rs',
-        name: 'main.rs',
-        path: 'main.rs',
-        isFolder: false,
-        content: '',
-      },
-    ];
-    setFiles(blankFiles);
-    setActiveFileId('file-main-rs');
-    setOpenTabs([
-      {
-        fileId: 'file-main-rs',
-        name: 'main.rs',
-        path: 'main.rs',
-        isModified: false,
-      },
-    ]);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(blankFiles));
-    } catch {
-      // ignore
+    if (confirm('Réinitialiser l\'espace de travail à son état initial Zig ?')) {
+      setFiles(DEFAULT_WORKSPACE_FILES);
+      setActiveFileId('file-main-zig');
+      setOpenTabs([
+        {
+          fileId: 'file-main-zig',
+          name: 'main.zig',
+          path: 'main.zig',
+          isModified: false,
+        },
+      ]);
+      localStorage.removeItem(STORAGE_KEY);
     }
   };
 
-  const allFolders = useMemo(() => {
-    const list: string[] = [];
-    const collect = (nodes: FileNode[]) => {
-      for (const n of nodes) {
-        if (n.isFolder) {
-          list.push(n.path);
-          if (n.children) collect(n.children);
-        }
-      }
-    };
-    collect(files);
-    return list;
-  }, [files]);
+  const handleSelectProblem = (diag: PythonDiagnostic) => {
+    setJumpToLine(diag.line);
+    setMobileView('editor');
+  };
+
+  const errorsCount = diagnostics.filter((d) => d.severity === 'error').length;
+  const warningsCount = diagnostics.filter((d) => d.severity === 'warning').length;
 
   return (
     <div
-      className="flex flex-col h-screen w-screen overflow-hidden font-sans select-none antialiased"
+      className="h-screen w-screen flex flex-col overflow-hidden select-none"
       style={{
         backgroundColor: activeTheme.colors.appBg,
         color: activeTheme.colors.textPrimary,
       }}
     >
+      {/* Offline Status Badge */}
       <OfflineIndicator />
 
-      {/* 1. Header (Brand, C / Rust Switcher, Theme, Run, Format) */}
+      {/* 1. Header Toolbar */}
       <Header
         activeTheme={activeTheme}
-        onSelectTheme={handleSelectTheme}
+        onSelectTheme={(t) => setActiveTheme(t)}
         onOpenThemeModal={() => setThemeModalOpen(true)}
         onRunCode={handleRunCode}
         isRunning={isRunning}
@@ -511,26 +447,36 @@ export default function App() {
         activeFilePath={activeFileNode?.path}
         isSidebarCollapsed={isSidebarCollapsed}
         onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
-        activeLanguage={activeLanguage}
-        onSelectLanguage={handleSelectLanguage}
       />
 
-      {/* 2. Main IDE Workspace (Sidebar + Editor + Terminal) */}
-      <div className="flex-1 flex min-h-0 overflow-hidden relative">
-        <Sidebar
-          files={files}
-          activeFileId={activeFileId}
-          onSelectFile={handleSelectFile}
-          onDeleteFile={handleDeleteFile}
-          onOpenNewFileDialog={() => setNewFileDialogOpen(true)}
-          onResetWorkspace={handleResetWorkspace}
-          activeTheme={activeTheme}
-          isCollapsed={isSidebarCollapsed}
-          onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
-        />
+      {/* 2. Main Workspace (Sidebar + Editor / Console) */}
+      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+        {/* Left Sidebar (File Explorer) */}
+        <div
+          className={`shrink-0 transition-all duration-200 z-20 ${
+            isSidebarCollapsed ? 'w-0 overflow-hidden hidden md:hidden' : 'w-56 md:w-60'
+          }`}
+        >
+          <Sidebar
+            files={files}
+            activeFileId={activeFileId}
+            onSelectFile={handleSelectFile}
+            onDeleteFile={handleDeleteFile}
+            onOpenNewFileDialog={() => setNewFileDialogOpen(true)}
+            onResetWorkspace={handleResetWorkspace}
+            activeTheme={activeTheme}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
+          />
+        </div>
 
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden" ref={rightContainerRef}>
-          {/* Tab Bar */}
+        {/* Right Coding & Terminal Work Area */}
+        <div
+          ref={rightContainerRef}
+          className="flex-1 flex flex-col min-w-0 overflow-hidden relative"
+          style={{ backgroundColor: activeTheme.colors.editorBg }}
+        >
+          {/* File Tabs Bar */}
           <TabBar
             tabs={openTabs}
             activeFileId={activeFileId}
@@ -539,11 +485,12 @@ export default function App() {
             activeTheme={activeTheme}
           />
 
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
-            {/* Editor Container */}
+          {/* Split Work Area: Upper Code Editor, Lower Console */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {/* Top Code Editor */}
             <div
-              className={`flex flex-col overflow-hidden min-h-0 ${
-                mobileView === 'editor' ? 'flex' : 'hidden md:flex'
+              className={`flex flex-col min-h-0 relative ${
+                mobileView === 'editor' ? 'flex-1 flex' : 'hidden md:flex'
               }`}
               style={{
                 height:
@@ -562,7 +509,7 @@ export default function App() {
                   diagnostics={diagnostics}
                   jumpToLine={jumpToLine}
                   onJumpComplete={() => setJumpToLine(null)}
-                  language={activeLanguage}
+                  onApplyFix={handleApplyFix}
                 />
               ) : (
                 <div
@@ -572,24 +519,14 @@ export default function App() {
                   <p className="text-sm opacity-60 mb-3">Aucun fichier sélectionné.</p>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleCreateFile('main.rs', false, '')}
+                      onClick={() => handleCreateFile('main.zig', false, '')}
                       className="px-3.5 py-1.5 rounded text-xs font-semibold cursor-pointer"
                       style={{
-                        backgroundColor: '#CE412B',
-                        color: '#FFFFFF',
+                        backgroundColor: '#F7A41D',
+                        color: '#1A1816',
                       }}
                     >
-                      Créer main.rs (Rust)
-                    </button>
-                    <button
-                      onClick={() => handleCreateFile('main.c', false, '')}
-                      className="px-3.5 py-1.5 rounded text-xs font-semibold cursor-pointer"
-                      style={{
-                        backgroundColor: '#00599C',
-                        color: '#FFFFFF',
-                      }}
-                    >
-                      Créer main.c (C)
+                      Créer main.zig (Zig)
                     </button>
                   </div>
                 </div>
@@ -626,6 +563,7 @@ export default function App() {
                 isRunning={isRunning}
                 diagnostics={diagnostics}
                 onSelectProblem={handleSelectProblem}
+                onApplyFix={handleApplyFix}
                 activeTheme={activeTheme}
                 fileName={activeFileNode?.name}
                 onExecuteRepl={handleExecuteRepl}
@@ -642,18 +580,23 @@ export default function App() {
         aria-label="Navigation mobile"
         className="md:hidden shrink-0 border-t flex items-center justify-around py-2 px-2 z-30 shadow-lg select-none"
         style={{
-          backgroundColor: activeTheme.colors.sidebarBg,
+          backgroundColor: activeTheme.colors.tabBarBg,
           borderColor: activeTheme.colors.border,
         }}
       >
         <button
+          onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+          className="flex flex-col items-center gap-0.5 text-[11px] opacity-75 hover:opacity-100"
+        >
+          <FolderCode className="w-4 h-4" />
+          <span>Fichiers</span>
+        </button>
+
+        <button
           onClick={() => setMobileView('editor')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
-            mobileView === 'editor' ? 'font-bold' : 'opacity-70'
-          }`}
+          className="flex flex-col items-center gap-0.5 text-[11px] font-semibold"
           style={{
-            color:
-              mobileView === 'editor' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color: mobileView === 'editor' ? activeTheme.colors.accent : activeTheme.colors.textSecondary,
           }}
         >
           <FileCode className="w-4 h-4" />
@@ -662,33 +605,27 @@ export default function App() {
 
         <button
           onClick={() => setMobileView('terminal')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors cursor-pointer ${
-            mobileView === 'terminal' ? 'font-bold' : 'opacity-70'
-          }`}
+          className="flex flex-col items-center gap-0.5 text-[11px] font-semibold"
           style={{
-            color:
-              mobileView === 'terminal' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color: mobileView === 'terminal' ? activeTheme.colors.accent : activeTheme.colors.textSecondary,
           }}
         >
           <Terminal className="w-4 h-4" />
-          <span>Console</span>
+          <span>Terminal</span>
         </button>
 
         <button
           onClick={() => setMobileView('problems')}
-          className={`flex flex-col items-center gap-1 text-[11px] font-medium transition-colors relative cursor-pointer ${
-            mobileView === 'problems' ? 'font-bold' : 'opacity-70'
-          }`}
+          className="flex flex-col items-center gap-0.5 text-[11px] font-semibold relative"
           style={{
-            color:
-              mobileView === 'problems' ? activeTheme.colors.accent : activeTheme.colors.textPrimary,
+            color: mobileView === 'problems' ? activeTheme.colors.accent : activeTheme.colors.textSecondary,
           }}
         >
           <AlertCircle className="w-4 h-4" />
-          <span>Problèmes</span>
-          {diagnostics.length > 0 && (
-            <span className="absolute -top-1 -right-2 bg-red-500 text-white rounded-full text-[9px] w-4 h-4 flex items-center justify-center font-bold">
-              {diagnostics.length}
+          <span>Diagnostic</span>
+          {errorsCount > 0 && (
+            <span className="absolute -top-1 right-2 w-3.5 h-3.5 bg-red-500 text-white rounded-full text-[9px] flex items-center justify-center font-bold">
+              {errorsCount}
             </span>
           )}
         </button>
@@ -696,12 +633,11 @@ export default function App() {
         <button
           onClick={handleRunCode}
           disabled={isRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold shadow-md cursor-pointer transition-transform active:scale-95 disabled:opacity-50"
+          className="flex items-center gap-1 px-3 py-1 rounded font-bold text-xs shadow-md active:scale-95 cursor-pointer"
           style={{
-            backgroundColor: activeLanguage === 'rust' ? '#CE412B' : activeTheme.colors.accent,
-            color: '#FFFFFF',
+            backgroundColor: activeTheme.colors.accent,
+            color: activeTheme.colors.accentText,
           }}
-          title="Compiler et exécuter"
         >
           {isRunning ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -713,24 +649,22 @@ export default function App() {
       </nav>
 
       {/* 4. Modals */}
-      {themeModalOpen && (
-        <ThemeModal
-          isOpen={themeModalOpen}
-          activeTheme={activeTheme}
-          onSelectTheme={handleSelectTheme}
-          onClose={() => setThemeModalOpen(false)}
-        />
-      )}
+      <ThemeModal
+        isOpen={themeModalOpen}
+        onClose={() => setThemeModalOpen(false)}
+        activeTheme={activeTheme}
+        onSelectTheme={(t) => {
+          setActiveTheme(t);
+        }}
+      />
 
-      {newFileDialogOpen && (
-        <NewFileDialog
-          isOpen={newFileDialogOpen}
-          onClose={() => setNewFileDialogOpen(false)}
-          onCreate={handleCreateFile}
-          activeTheme={activeTheme}
-          folders={allFolders}
-        />
-      )}
+      <NewFileDialog
+        isOpen={newFileDialogOpen}
+        onClose={() => setNewFileDialogOpen(false)}
+        onCreate={handleCreateFile}
+        activeTheme={activeTheme}
+        folders={[]}
+      />
     </div>
   );
 }

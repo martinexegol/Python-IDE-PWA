@@ -1,10 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { PythonTheme, PythonDiagnostic, CompletionItem } from '../types';
-import { tokenizeCLine, Token } from '../c/syntax';
-import { tokenizeRustLine } from '../rust/syntax';
+import { tokenizeZigLine, Token } from '../zig/syntax';
 import { calculateIndentGuides, getActiveIndentGuideLevel } from '../utils/indentation';
-import { getCCompletionsForQuery } from '../c/autocomplete';
-import { getRustCompletionsForQuery } from '../rust/autocomplete';
+import { getZigCompletionsForQuery } from '../zig/autocomplete';
 import { AlertCircle, AlertTriangle, Sparkles, ChevronRight } from 'lucide-react';
 
 interface CodeEditorProps {
@@ -14,7 +12,7 @@ interface CodeEditorProps {
   diagnostics: PythonDiagnostic[];
   jumpToLine?: number | null;
   onJumpComplete?: () => void;
-  language?: 'c' | 'rust';
+  onApplyFix?: (diagnostic: PythonDiagnostic) => void;
 }
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
@@ -24,7 +22,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   diagnostics,
   jumpToLine,
   onJumpComplete,
-  language = 'c',
+  onApplyFix,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -104,14 +102,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     );
   }, [diagnostics, cursorLine]);
 
-  // Filter autocomplete candidates for C or Rust
+  // Filter autocomplete candidates for Zig
   const completions = useMemo(() => {
     if (!autocompleteOpen) return [];
-    if (language === 'rust') {
-      return getRustCompletionsForQuery(autocompleteQuery, code);
-    }
-    return getCCompletionsForQuery(autocompleteQuery, code);
-  }, [autocompleteOpen, autocompleteQuery, code, language]);
+    return getZigCompletionsForQuery(autocompleteQuery, code);
+  }, [autocompleteOpen, autocompleteQuery, code]);
 
   // Synchronize scroll between textarea and syntax highlight overlay
   const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
@@ -206,6 +201,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         const markerIdx = insert.indexOf('$CURSOR');
         insert = insert.replace('$CURSOR', '');
         targetCursorPos = wordStartOffset + markerIdx;
+      }
+
+      // Automatically strip any snippet markers like $1, $0, etc.
+      if (/\$[0-9]/.test(insert)) {
+        if (targetCursorPos === -1) {
+          const match = insert.match(/\$[0-9]/);
+          if (match && match.index !== undefined) {
+            targetCursorPos = wordStartOffset + match.index;
+          }
+        }
+        insert = insert.replace(/\$[0-9]+/g, '');
       }
 
       const newCode = before + insert + after;
@@ -546,17 +552,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     updateCursorPosition(true);
   };
 
-  // Tokenize lines for rendering in C (C99/C11) or Rust (2021)
+  // Tokenize lines for rendering in Zig (0.13.0)
   const tokenizedLines = useMemo(() => {
-    let inBlockComment = false;
     return lines.map((line) => {
-      const res = language === 'rust'
-        ? tokenizeRustLine(line, inBlockComment)
-        : tokenizeCLine(line, inBlockComment);
-      inBlockComment = res.inBlockComment;
+      const res = tokenizeZigLine(line);
       return res.tokens;
     });
-  }, [lines, language]);
+  }, [lines]);
 
   const charWidthPx = 7.8; // monospace character width in JetBrains Mono 13px
 
@@ -814,9 +816,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             >
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3 text-cyan-400" />
-                <span>Complétion Python (↑ ↓ flèches, Entrée pour valider)</span>
+                <span>Complétion Zig (↑ ↓ flèches, Entrée pour valider)</span>
               </div>
-              <span className="font-mono text-[9px]">Python 3.12</span>
+              <span className="font-mono text-[9px]">zig 0.13.0</span>
             </div>
 
             {/* Candidates List */}
@@ -897,7 +899,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             <div className="flex items-center gap-2 mb-1.5 pb-1 border-b" style={{ borderColor: activeTheme.colors.border }}>
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
               <span className="font-bold text-red-500 text-[11px] uppercase tracking-wider">
-                Analyse Statique Python • Ligne {hoveredDiagnostic.diag.line}
+                Analyse Statique Zig • Ligne {hoveredDiagnostic.diag.line}
               </span>
               {hoveredDiagnostic.diag.code && (
                 <span className="ml-auto font-mono text-[10px] px-1.5 py-0.2 rounded border opacity-60">
@@ -946,7 +948,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         }}
       >
         <span>Ln {cursorLine}, Col {cursorCol}</span>
-        <span>Espaces: 4 (PEP 8)</span>
+        <span>Espaces: 4 (Zig 0.13.0)</span>
         <span>UTF-8</span>
       </div>
     </div>
@@ -993,6 +995,23 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             <button
               type="button"
               onClick={() => {
+                if (onApplyFix) {
+                  onApplyFix(activeDiagnostic);
+                  return;
+                }
+                if (activeDiagnostic.code === 'missing_std_import') {
+                  onChange(`${activeDiagnostic.suggestedCodeSnippet}${code}`);
+                  return;
+                }
+                if (activeDiagnostic.code === 'memory_leak') {
+                  const curLines = [...lines];
+                  const allocLine = activeDiagnostic.line;
+                  if (allocLine <= curLines.length) {
+                    curLines.splice(allocLine, 0, `    ${activeDiagnostic.suggestedCodeSnippet}`);
+                    onChange(curLines.join('\n'));
+                    return;
+                  }
+                }
                 const lineIdx = activeDiagnostic.line - 1;
                 const newLines = [...lines];
                 if (lineIdx >= 0 && lineIdx < newLines.length) {
@@ -1005,7 +1024,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                 backgroundColor: activeDiagnostic.severity === 'error' ? '#ef4444' : activeTheme.colors.accent,
                 color: '#ffffff',
               }}
-              title="Remplacer automatiquement la ligne par la correction suggérée"
+              title="Remplacer automatiquement par la correction suggérée"
             >
               <span>⚡ Appliquer la correction</span>
             </button>
@@ -1052,161 +1071,215 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         ;
       </button>
 
-      {language === 'rust' ? (
-        <>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('::')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Chemin / Scope (::)"
-          >
-            ::
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('if ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Structure conditionnelle if"
+      >
+        if
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('-> ')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Type de retour (->)"
-          >
-            -&gt;
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('else ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Alternative conditionnelle else"
+      >
+        else
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol(' => ')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxKeyword,
-            }}
-            title="Branche match (=>)"
-          >
-            =&gt;
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('while ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Boucle conditionnelle while"
+      >
+        while
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('&')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Emprunt / Référence (&)"
-          >
-            &
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('for ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Boucle itérative for"
+      >
+        for
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('mut ')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxKeyword,
-            }}
-            title="Mutable (mut)"
-          >
-            mut
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('!')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxOperator,
+        }}
+        title="Union d'erreur (!T)"
+      >
+        !
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('println!("{}");')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.accent,
-            }}
-            title="Macro println!()"
-          >
-            println!
-          </button>
-        </>
-      ) : (
-        <>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('*')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Pointeur / Déréférencement (*)"
-          >
-            *
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('?')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxOperator,
+        }}
+        title="Optionnel (?T)"
+      >
+        ?
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('&')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Adresse mémoire (&)"
-          >
-            &
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('defer ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Instruction defer (nettoyage LIFO garanti)"
+      >
+        defer
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('->')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxOperator,
-            }}
-            title="Opérateur flèche structure (->)"
-          >
-            -&gt;
-          </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('try ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Propagation d'erreur try"
+      >
+        try
+      </button>
 
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertSymbol('// ')}
-            className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-            style={{
-              backgroundColor: activeTheme.colors.tabInactiveBg,
-              borderColor: activeTheme.colors.border,
-              color: activeTheme.colors.syntaxComment,
-            }}
-            title="Commentaire (//)"
-          >
-            //
-          </button>
-        </>
-      )}
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('const ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Constante immuable"
+      >
+        const
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('var ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Variable mutable"
+      >
+        var
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('pub fn ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Fonction publique"
+      >
+        pub fn
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('const std = @import("std");\n')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxAnnotation,
+        }}
+        title="Importer la bibliothèque standard"
+      >
+        @import("std")
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('std.debug.print("{s}\\n", .{"Zig"});\n')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.accent,
+        }}
+        title="Afficher avec std.debug.print"
+      >
+        std.debug.print
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertPair('.{', '}')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxDefault,
+        }}
+        title="Tuple anonyme .{}"
+      >
+        .{'{ }'}
+      </button>
 
       <button
         type="button"
@@ -1218,7 +1291,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.syntaxString,
         }}
-        title="Guillemets simples doubles '' avec curseur au milieu"
+        title="Caractère simple ''"
       >
         ' '
       </button>
@@ -1233,7 +1306,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.syntaxString,
         }}
-        title='Guillemets doubles "" avec curseur au milieu'
+        title='Chaîne de caractères ""'
       >
         " "
       </button>
@@ -1278,7 +1351,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.textPrimary,
         }}
-        title="Accolades {}"
+        title="Accolades de bloc {}"
       >
         {'{ }'}
       </button>
@@ -1300,7 +1373,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('.')}
+        onClick={() => insertSymbol(' != ')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
@@ -1308,78 +1381,22 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           color: activeTheme.colors.textPrimary,
         }}
       >
-        .
+        !=
       </button>
 
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol(', ')}
+        onClick={() => insertSymbol('// ')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.textPrimary,
+          color: activeTheme.colors.syntaxComment,
         }}
+        title="Commentaire (//)"
       >
-        ,
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('_')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.textPrimary,
-        }}
-      >
-        _
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol(' => ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Flèche =>"
-      >
-        =&gt;
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('!')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxOperator,
-        }}
-      >
-        !
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('?')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxOperator,
-        }}
-      >
-        ?
+        //
       </button>
     </div>
   </div>
@@ -1395,11 +1412,12 @@ function getTokenColor(token: Token, theme: PythonTheme): string {
     case 'string':
     case 'char':
       return theme.colors.syntaxString;
-    case 'preprocessor':
+    case 'builtin':
       return theme.colors.syntaxAnnotation;
     case 'number':
       return theme.colors.syntaxNumber;
     case 'comment':
+    case 'docComment':
       return theme.colors.syntaxComment;
     case 'function':
       return theme.colors.syntaxFunction;
