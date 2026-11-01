@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { THEMES } from './themes';
 import { DEFAULT_WORKSPACE_FILES } from './defaultWorkspace';
 import { PythonTheme, FileNode, TabItem, PythonDiagnostic, ConsoleMessage } from './types';
-import { lintZigCode, formatZigCode } from './zig/linter';
-import { runZigCode } from './zig/runner';
+import { lintCCode, formatCCode } from './c/linter';
+import { runCCode } from './c/runner';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { TabBar } from './components/TabBar';
@@ -23,9 +23,9 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // 1. Theme state
+  // 1. Theme state: default to One Dark Pro
   const [activeTheme, setActiveTheme] = useState<PythonTheme>(() => {
-    const saved = localStorage.getItem('ide_studio_theme');
+    const saved = localStorage.getItem('ide_python_theme');
     if (saved) {
       const found = THEMES.find((t) => t.id === saved);
       if (found) return found;
@@ -34,38 +34,15 @@ export default function App() {
   });
 
   // 2. Multi-File Project State
-  const STORAGE_KEY = 'ide_zig_workspace_v1';
+  const STORAGE_KEY = 'ide_c_workspace_v1';
 
   const [files, setFiles] = useState<FileNode[]>(() => {
-    // Purge legacy storage keys containing example / demo files or old workspaces
-    try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('ide_') && k !== STORAGE_KEY && k !== 'ide_studio_theme') {
-          keysToRemove.push(k);
-        }
-      }
-      keysToRemove.forEach((k) => localStorage.removeItem(k));
-    } catch {
-      // ignore
-    }
-
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const hasOldDemoCode = parsed.some(
-            (f: any) =>
-              typeof f.content === 'string' &&
-              (f.content.includes('SensorData') ||
-                f.content.includes('pointers_demo') ||
-                f.content.includes('PowerSupply'))
-          );
-          if (!hasOldDemoCode) {
-            return parsed;
-          }
+          return parsed;
         }
       } catch {
         // fallback
@@ -74,13 +51,13 @@ export default function App() {
     return DEFAULT_WORKSPACE_FILES;
   });
 
-  const [activeFileId, setActiveFileId] = useState<string>('file-main-zig');
+  const [activeFileId, setActiveFileId] = useState<string>('file-main-c');
 
   const [openTabs, setOpenTabs] = useState<TabItem[]>([
     {
-      fileId: 'file-main-zig',
-      name: 'main.zig',
-      path: 'main.zig',
+      fileId: 'file-main-c',
+      name: 'main.c',
+      path: 'main.c',
       isModified: false,
     },
   ]);
@@ -90,7 +67,7 @@ export default function App() {
     {
       id: 'init-msg-1',
       type: 'system',
-      text: 'Compilateur Zig 0.13.0 prêt',
+      text: 'Compilateur GCC 13.2.0 (C11) prêt',
       timestamp: new Date().toLocaleTimeString('fr-FR'),
     },
   ]);
@@ -119,7 +96,7 @@ export default function App() {
   // Save selected theme to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('ide_studio_theme', activeTheme.id);
+      localStorage.setItem('ide_python_theme', activeTheme.id);
     } catch (e) {
       console.warn('Erreur sauvegarde thème :', e);
     }
@@ -146,11 +123,11 @@ export default function App() {
 
   const activeCode = activeFileNode?.content ?? '';
 
-  // Synchronous static analysis (Zig Linter & Memory Diagnostics)
+  // Synchronous static analysis (C Live Linter)
   const diagnostics: PythonDiagnostic[] = useMemo(() => {
     if (!activeFileNode || activeFileNode.isFolder) return [];
-    if (!activeFileNode.name.endsWith('.zig')) return [];
-    return lintZigCode(activeCode);
+    if (!activeFileNode.name.endsWith('.c') && !activeFileNode.name.endsWith('.h')) return [];
+    return lintCCode(activeCode);
   }, [activeFileNode, activeCode]);
 
   // Code change handler
@@ -194,7 +171,7 @@ export default function App() {
       {
         id: `diag-title-${Date.now()}`,
         type: 'stderr',
-        text: `⚠️ Rapport du Compilateur Zig (zig 0.13.0) : ${diagnostics.length} anomalie(s) détectée(s) :`,
+        text: `⚠️ Rapport d'Analyse Python : ${diagnostics.length} anomalie(s) détectée(s) :`,
         timestamp: timeStr,
       },
     ];
@@ -223,23 +200,7 @@ export default function App() {
   // Apply 1-click automatic fix for diagnostic
   const handleApplyFix = (diag: PythonDiagnostic) => {
     if (!diag.suggestedCodeSnippet) return;
-
-    if (diag.code === 'missing_std_import') {
-      handleCodeChange(`${diag.suggestedCodeSnippet}${activeCode}`);
-      return;
-    }
-
     const curLines = activeCode.split('\n');
-
-    if (diag.code === 'memory_leak') {
-      const allocLine = diag.line;
-      if (allocLine <= curLines.length) {
-        curLines.splice(allocLine, 0, `    ${diag.suggestedCodeSnippet}`);
-        handleCodeChange(curLines.join('\n'));
-        return;
-      }
-    }
-
     const lineIdx = diag.line - 1;
     if (lineIdx >= 0 && lineIdx < curLines.length) {
       curLines[lineIdx] = diag.suggestedCodeSnippet;
@@ -247,7 +208,7 @@ export default function App() {
     }
   };
 
-  // Execute current Zig code
+  // Execute current Python code
   const handleRunCode = async () => {
     const compileErrors = diagnostics.filter((d) => d.severity === 'error');
     if (compileErrors.length > 0) {
@@ -263,22 +224,22 @@ export default function App() {
     }
 
     setIsRunning(true);
-    const fileName = activeFileNode?.name || 'main.zig';
-    const result = await runZigCode(activeCode, fileName);
+    const fileName = activeFileNode?.name || 'main.c';
+    const result = await runCCode(activeCode, fileName);
     setConsoleMessages((prev) => [...prev, ...result.messages]);
     setIsRunning(false);
   };
 
-  // Format Code (Zig standard, 4 spaces)
+  // Format Code (C standard, 4 spaces)
   const handleFormatCode = () => {
-    const formatted = formatZigCode(activeCode);
+    const formatted = formatCCode(activeCode);
     handleCodeChange(formatted);
     setConsoleMessages((prev) => [
       ...prev,
       {
         id: `fmt-${Date.now()}`,
         type: 'info',
-        text: 'Code formaté (Zig standard, 4 espaces).',
+        text: 'Code C formaté selon le style standard C11.',
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
@@ -291,17 +252,13 @@ export default function App() {
       {
         id: `repl-in-${Date.now()}`,
         type: 'system',
-        text: `zig-sh$ ${command}`,
+        text: `>>> ${command}`,
         timestamp: new Date().toLocaleTimeString('fr-FR'),
       },
     ]);
 
-    let executable = command;
-    if (!command.includes('pub fn main') && !command.includes('@import')) {
-      executable = `const std = @import("std");\n\npub fn main() !void {\n    ${command};\n}`;
-    }
-    const result = await runZigCode(executable, 'repl.zig');
-    setConsoleMessages((prev) => [...prev, ...result.messages.filter((m) => m.type !== 'system')]);
+    const result = await runCCode(command, 'repl.c');
+    setConsoleMessages((prev) => [...prev, ...result.messages.filter((m: ConsoleMessage) => m.type !== 'system')]);
   };
 
   // Splitter Handlers
@@ -400,14 +357,14 @@ export default function App() {
   };
 
   const handleResetWorkspace = () => {
-    if (confirm('Réinitialiser l\'espace de travail à son état initial Zig ?')) {
+    if (confirm("Réinitialiser l'espace de travail à son état initial C ?")) {
       setFiles(DEFAULT_WORKSPACE_FILES);
-      setActiveFileId('file-main-zig');
+      setActiveFileId('file-main-c');
       setOpenTabs([
         {
-          fileId: 'file-main-zig',
-          name: 'main.zig',
-          path: 'main.zig',
+          fileId: 'file-main-c',
+          name: 'main.c',
+          path: 'main.c',
           isModified: false,
         },
       ]);
@@ -421,11 +378,10 @@ export default function App() {
   };
 
   const errorsCount = diagnostics.filter((d) => d.severity === 'error').length;
-  const warningsCount = diagnostics.filter((d) => d.severity === 'warning').length;
 
   return (
     <div
-      className="h-screen w-screen flex flex-col overflow-hidden select-none"
+      className="h-screen w-full max-w-full overflow-hidden flex flex-col select-none"
       style={{
         backgroundColor: activeTheme.colors.appBg,
         color: activeTheme.colors.textPrimary,
@@ -450,7 +406,7 @@ export default function App() {
       />
 
       {/* 2. Main Workspace (Sidebar + Editor / Console) */}
-      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+      <div className="flex-1 flex overflow-hidden min-h-0 relative w-full max-w-full">
         {/* Left Sidebar (File Explorer) */}
         <div
           className={`shrink-0 transition-all duration-200 z-20 ${
@@ -473,7 +429,7 @@ export default function App() {
         {/* Right Coding & Terminal Work Area */}
         <div
           ref={rightContainerRef}
-          className="flex-1 flex flex-col min-w-0 overflow-hidden relative"
+          className="flex-1 flex flex-col min-w-0 overflow-hidden relative w-full"
           style={{ backgroundColor: activeTheme.colors.editorBg }}
         >
           {/* File Tabs Bar */}
@@ -486,10 +442,10 @@ export default function App() {
           />
 
           {/* Split Work Area: Upper Code Editor, Lower Console */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full">
             {/* Top Code Editor */}
             <div
-              className={`flex flex-col min-h-0 relative ${
+              className={`flex flex-col min-h-0 relative w-full ${
                 mobileView === 'editor' ? 'flex-1 flex' : 'hidden md:flex'
               }`}
               style={{
@@ -509,7 +465,6 @@ export default function App() {
                   diagnostics={diagnostics}
                   jumpToLine={jumpToLine}
                   onJumpComplete={() => setJumpToLine(null)}
-                  onApplyFix={handleApplyFix}
                 />
               ) : (
                 <div
@@ -519,14 +474,14 @@ export default function App() {
                   <p className="text-sm opacity-60 mb-3">Aucun fichier sélectionné.</p>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleCreateFile('main.zig', false, '')}
+                      onClick={() => handleCreateFile('main.py', false, '')}
                       className="px-3.5 py-1.5 rounded text-xs font-semibold cursor-pointer"
                       style={{
-                        backgroundColor: '#F7A41D',
-                        color: '#1A1816',
+                        backgroundColor: '#387EB8',
+                        color: '#FFFFFF',
                       }}
                     >
-                      Créer main.zig (Zig)
+                      Créer main.py (Python)
                     </button>
                   </div>
                 </div>
@@ -544,7 +499,7 @@ export default function App() {
 
             {/* Bottom Terminal Console */}
             <div
-              className={`flex flex-col min-h-0 overflow-hidden ${
+              className={`flex flex-col min-h-0 overflow-hidden w-full ${
                 mobileView === 'terminal' || mobileView === 'problems'
                   ? 'flex-1 flex'
                   : 'hidden md:flex'
@@ -578,7 +533,7 @@ export default function App() {
       {/* 3. Mobile Navigation Bottom Bar */}
       <nav
         aria-label="Navigation mobile"
-        className="md:hidden shrink-0 border-t flex items-center justify-around py-2 px-2 z-30 shadow-lg select-none"
+        className="md:hidden shrink-0 border-t flex items-center justify-around py-2 px-2 z-30 shadow-lg select-none w-full max-w-full overflow-hidden"
         style={{
           backgroundColor: activeTheme.colors.tabBarBg,
           borderColor: activeTheme.colors.border,

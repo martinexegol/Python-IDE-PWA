@@ -93,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
 
       const isActive = activeFileId === node.id;
-      const isZig = node.name.endsWith('.zig') || node.name.endsWith('.zon');
+      const isPython = node.name.endsWith('.py');
 
       return (
         <div
@@ -114,10 +114,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
         >
           <div className="flex items-center gap-1.5 min-w-0">
-            {isZig ? (
+            {isPython ? (
               <FileCode
                 className="w-3.5 h-3.5 shrink-0"
-                style={{ color: '#F7A41D' }}
+                style={{ color: '#387EB8' }}
               />
             ) : (
               <FileText className="w-3.5 h-3.5 shrink-0 opacity-60" />

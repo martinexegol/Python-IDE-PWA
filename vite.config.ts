@@ -11,14 +11,14 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
-          name: 'IDE Python',
-          short_name: 'IDE Python',
+          name: 'C IDE',
+          short_name: 'C IDE',
           description:
-            "IDE professionnel dédié au langage Python avec coloration syntaxique, guides d'indentation verticaux PEP 8, auto-complétion intelligente, analyse statique en direct et plus de 20 thèmes.",
-          theme_color: '#387EB8',
+            "IDE professionnel dédié au langage C avec coloration syntaxique, compilation GCC 13.2, détection d'erreurs en direct et support PWA.",
+          theme_color: '#00599C',
           background_color: '#111827',
           display: 'standalone',
           orientation: 'any',

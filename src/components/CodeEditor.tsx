@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { PythonTheme, PythonDiagnostic, CompletionItem } from '../types';
-import { tokenizeZigLine, Token } from '../zig/syntax';
+import { tokenizeCLine, Token } from '../c/syntax';
 import { calculateIndentGuides, getActiveIndentGuideLevel } from '../utils/indentation';
-import { getZigCompletionsForQuery } from '../zig/autocomplete';
+import { getCCompletionsForQuery } from '../c/autocomplete';
 import { AlertCircle, AlertTriangle, Sparkles, ChevronRight } from 'lucide-react';
 
 interface CodeEditorProps {
@@ -12,7 +12,6 @@ interface CodeEditorProps {
   diagnostics: PythonDiagnostic[];
   jumpToLine?: number | null;
   onJumpComplete?: () => void;
-  onApplyFix?: (diagnostic: PythonDiagnostic) => void;
 }
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
@@ -22,7 +21,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   diagnostics,
   jumpToLine,
   onJumpComplete,
-  onApplyFix,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -92,20 +90,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     return map;
   }, [diagnostics]);
 
-  // Find active error or warning to display visible suggestion
-  const activeDiagnostic = useMemo(() => {
-    return (
-      diagnostics.find((d) => d.line === cursorLine && d.severity === 'error') ||
-      diagnostics.find((d) => d.severity === 'error') ||
-      diagnostics.find((d) => d.line === cursorLine && d.severity === 'warning') ||
-      null
-    );
-  }, [diagnostics, cursorLine]);
-
-  // Filter autocomplete candidates for Zig
+  // Filter autocomplete candidates
   const completions = useMemo(() => {
     if (!autocompleteOpen) return [];
-    return getZigCompletionsForQuery(autocompleteQuery, code);
+    return getCCompletionsForQuery(autocompleteQuery, code);
   }, [autocompleteOpen, autocompleteQuery, code]);
 
   // Synchronize scroll between textarea and syntax highlight overlay
@@ -201,17 +189,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         const markerIdx = insert.indexOf('$CURSOR');
         insert = insert.replace('$CURSOR', '');
         targetCursorPos = wordStartOffset + markerIdx;
-      }
-
-      // Automatically strip any snippet markers like $1, $0, etc.
-      if (/\$[0-9]/.test(insert)) {
-        if (targetCursorPos === -1) {
-          const match = insert.match(/\$[0-9]/);
-          if (match && match.index !== undefined) {
-            targetCursorPos = wordStartOffset + match.index;
-          }
-        }
-        insert = insert.replace(/\$[0-9]+/g, '');
       }
 
       const newCode = before + insert + after;
@@ -500,7 +477,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       return;
     }
 
-    // 4. Enter Key: Intelligent Python Auto-Indentation
+    // 4. Enter Key: Intelligent Python Auto-Indentation & If-statement elif generation
     if (e.key === 'Enter') {
       e.preventDefault();
       const start = textareaRef.current?.selectionStart ?? 0;
@@ -511,6 +488,54 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       // Count leading spaces of current line
       const match = currentLineText.match(/^(\s*)/);
       let indent = match ? match[1] : '';
+
+      // Case A: Cursor is on a line with "pass" under an if / elif / else statement
+      // -> Supprime le "pass" automatique en cas de retour à la ligne
+      if (currentLineText.trim() === 'pass') {
+        let prevNonEmptyLine = '';
+        for (let p = cursorLine - 2; p >= 0; p--) {
+          if (lines[p].trim()) {
+            prevNonEmptyLine = lines[p].trim();
+            break;
+          }
+        }
+        if (/^(?:if\b|elif\b|else\b|while\b)/.test(prevNonEmptyLine)) {
+          const parentIndentMatch = prevNonEmptyLine.match(/^(\s*)/);
+          const parentIndent = parentIndentMatch ? parentIndentMatch[1] : '';
+          const lineStartOffset = code.lastIndexOf('\n', start - 1) + 1;
+          const lineEndOffset = code.indexOf('\n', start);
+          const actualLineEnd = lineEndOffset === -1 ? code.length : lineEndOffset;
+
+          const replacement = prevNonEmptyLine.startsWith('else') || prevNonEmptyLine.startsWith('while')
+            ? `${parentIndent}    `
+            : `${parentIndent}elif `;
+          const newCode = code.slice(0, lineStartOffset) + replacement + code.slice(actualLineEnd);
+          const newPos = lineStartOffset + replacement.length;
+          updateCodeAndCursor(newCode, newPos);
+          return;
+        }
+      }
+
+      // Case B: Cursor is at the end of 'if ...:', 'elif ...:', or 'else:' and next line has automatic 'pass'
+      if (/^\s*(?:if\b.*:|elif\b.*:|else\s*:|while\b.*:)$/.test(currentLineText.trim()) && /^\r?\n\s*pass\b/.test(textAfterCursor)) {
+        const extraIndent = '    ';
+        const restAfterPass = textAfterCursor.replace(/^\r?\n\s*pass\b/, '');
+        const insertText = `\n${indent}${extraIndent}`;
+        const newCode = textBeforeCursor + insertText + restAfterPass;
+        const newPos = start + 1 + indent.length + extraIndent.length;
+        updateCodeAndCursor(newCode, newPos);
+        return;
+      }
+
+      // Case C: Cursor is at the end of 'if ...:' and at end of block or file
+      if (/^\s*if\b.*:$/.test(currentLineText.trim()) && (!textAfterCursor.trim() || /^\r?\n\s*$/.test(textAfterCursor))) {
+        const extraIndent = '    ';
+        const insertText = `\n${indent}${extraIndent}\n${indent}elif `;
+        const newCode = textBeforeCursor + insertText + textAfterCursor.trimStart();
+        const newPos = start + 1 + indent.length + extraIndent.length;
+        updateCodeAndCursor(newCode, newPos);
+        return;
+      }
 
       // Check if cursor is right after ':', '{', '(', or '['
       const lastChar = textBeforeCursor.trim().slice(-1);
@@ -552,11 +577,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     updateCursorPosition(true);
   };
 
-  // Tokenize lines for rendering in Zig (0.13.0)
+  // Tokenize lines for rendering
   const tokenizedLines = useMemo(() => {
+    let inBlockComment = false;
     return lines.map((line) => {
-      const res = tokenizeZigLine(line);
-      return res.tokens;
+      const { tokens, inBlockComment: nextInComment } = tokenizeCLine(line, inBlockComment);
+      inBlockComment = nextInComment;
+      return tokens;
     });
   }, [lines]);
 
@@ -594,16 +621,12 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             return (
               <div
                 key={lineNum}
-                className={`h-[22px] flex items-center justify-end gap-1.5 relative group px-1 rounded-xs transition-colors ${
-                  hasError ? 'bg-red-500/25 text-red-400 font-bold' : ''
-                }`}
+                className="h-[22px] flex items-center justify-end gap-1.5 relative group"
                 style={{
-                  color: hasError
-                    ? '#f87171'
-                    : isCur
+                  color: isCur
                     ? activeTheme.colors.editorLineNumberActive
                     : activeTheme.colors.editorLineNumber,
-                  fontWeight: isCur || hasError ? 'bold' : 'normal',
+                  fontWeight: isCur ? 'bold' : 'normal',
                 }}
               >
                 {/* Pulsing Red Dot in the Margin for Automatic Errors */}
@@ -642,7 +665,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
       {/* 2. Main Editor Area: Indent Guides + Syntax Tokens + Invisible Textarea */}
       <div className="relative flex-1 h-full overflow-hidden">
-        {/* Layer A: Active Line Highlight & Visible Red Error Lines */}
+        {/* Layer A: Active Line Highlight */}
         <div
           className="absolute left-0 right-0 pointer-events-none transition-all duration-75"
           style={{
@@ -652,26 +675,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             zIndex: 1,
           }}
         />
-
-        {/* Lignes en rouge très visibles pour chaque anomalie */}
-        {lines.map((_, lineIdx) => {
-          const lineNum = lineIdx + 1;
-          const lineDiags = diagnosticsByLine.get(lineNum);
-          const hasError = lineDiags?.some((d) => d.severity === 'error');
-          if (!hasError) return null;
-
-          return (
-            <div
-              key={`err-row-${lineIdx}`}
-              className="absolute left-0 right-0 pointer-events-none bg-red-500/20 border-l-4 border-red-500 shadow-[inset_0_0_10px_rgba(239,68,68,0.25)] transition-all duration-150"
-              style={{
-                top: `${lineIdx * 22 + 8}px`,
-                height: '22px',
-                zIndex: 1,
-              }}
-            />
-          );
-        })}
 
         {/* Layer B: Vertical Indent Guides & Syntax Highlighted Text */}
         <div
@@ -715,7 +718,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
                   {/* Highlighted Tokens with Squiggly Errors */}
                   <span className="relative z-10">
-                    {tokens.map((token, tIdx) => {
+                    {tokens.map((token: Token, tIdx: number) => {
                       const tokenColor = getTokenColor(token, activeTheme);
 
                       // Check if this token or line has an error
@@ -754,7 +757,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
         {/* Layer C: Interactive Textarea for Input */}
         <textarea
-          id="python-code-editor-textarea"
           ref={textareaRef}
           value={code}
           onChange={(e) => {
@@ -816,14 +818,14 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             >
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3 text-cyan-400" />
-                <span>Complétion Zig (↑ ↓ flèches, Entrée pour valider)</span>
+                <span>Complétion C (↑ ↓ flèches, Entrée pour valider)</span>
               </div>
-              <span className="font-mono text-[9px]">zig 0.13.0</span>
+              <span className="font-mono text-[9px]">C11 / GCC</span>
             </div>
 
             {/* Candidates List */}
             <div className="max-h-56 overflow-y-auto p-1 space-y-0.5">
-              {completions.map((item, idx) => {
+              {completions.map((item: CompletionItem, idx: number) => {
                 const isSelected = idx === autocompleteIndex;
                 return (
                   <div
@@ -899,7 +901,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             <div className="flex items-center gap-2 mb-1.5 pb-1 border-b" style={{ borderColor: activeTheme.colors.border }}>
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
               <span className="font-bold text-red-500 text-[11px] uppercase tracking-wider">
-                Analyse Statique Zig • Ligne {hoveredDiagnostic.diag.line}
+                Analyse Statique Python • Ligne {hoveredDiagnostic.diag.line}
               </span>
               {hoveredDiagnostic.diag.code && (
                 <span className="ml-auto font-mono text-[10px] px-1.5 py-0.2 rounded border opacity-60">
@@ -941,97 +943,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
       {/* Editor Status Bar Helper */}
       <div
-        className="absolute bottom-1 right-4 z-20 pointer-events-none text-[11px] font-mono px-2 py-0.5 rounded opacity-60 flex items-center gap-3"
+        className="absolute bottom-1 right-2 sm:right-4 z-20 pointer-events-none text-[10px] sm:text-[11px] font-mono px-2 py-0.5 rounded opacity-60 flex items-center gap-2 sm:gap-3 max-w-[calc(100%-16px)] truncate"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           color: activeTheme.colors.textPrimary,
         }}
       >
         <span>Ln {cursorLine}, Col {cursorCol}</span>
-        <span>Espaces: 4 (Zig 0.13.0)</span>
-        <span>UTF-8</span>
+        <span className="hidden sm:inline">Espaces: 4 (PEP 8)</span>
+        <span className="hidden sm:inline">UTF-8</span>
       </div>
     </div>
-
-    {/* Visible Error & Correction Suggestion Banner */}
-    {activeDiagnostic && (
-      <div
-        className="border-t px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs shrink-0 select-text animate-in slide-in-from-bottom-2 duration-150 z-30"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderTopColor: activeDiagnostic.severity === 'error' ? '#ef4444' : '#f59e0b',
-        }}
-      >
-        <div className="flex items-start gap-2.5 min-w-0">
-          <div
-            className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 font-bold text-[11px] ${
-              activeDiagnostic.severity === 'error'
-                ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-            }`}
-          >
-            {activeDiagnostic.severity === 'error' ? '!' : 'i'}
-          </div>
-          <div className="min-w-0 space-y-0.5">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span
-                className={`font-bold ${
-                  activeDiagnostic.severity === 'error' ? 'text-red-400' : 'text-amber-400'
-                }`}
-              >
-                Ligne {activeDiagnostic.line} :
-              </span>
-              <span className="font-semibold">{activeDiagnostic.message}</span>
-            </div>
-            <div className="text-[11px] text-amber-200/90 flex items-start sm:items-center gap-1.5 flex-wrap">
-              <span className="font-semibold text-amber-400 shrink-0">💡 Suggestion de correction :</span>
-              <span>{activeDiagnostic.howToFix}</span>
-            </div>
-          </div>
-        </div>
-
-        {activeDiagnostic.suggestedCodeSnippet && (
-          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-            <button
-              type="button"
-              onClick={() => {
-                if (onApplyFix) {
-                  onApplyFix(activeDiagnostic);
-                  return;
-                }
-                if (activeDiagnostic.code === 'missing_std_import') {
-                  onChange(`${activeDiagnostic.suggestedCodeSnippet}${code}`);
-                  return;
-                }
-                if (activeDiagnostic.code === 'memory_leak') {
-                  const curLines = [...lines];
-                  const allocLine = activeDiagnostic.line;
-                  if (allocLine <= curLines.length) {
-                    curLines.splice(allocLine, 0, `    ${activeDiagnostic.suggestedCodeSnippet}`);
-                    onChange(curLines.join('\n'));
-                    return;
-                  }
-                }
-                const lineIdx = activeDiagnostic.line - 1;
-                const newLines = [...lines];
-                if (lineIdx >= 0 && lineIdx < newLines.length) {
-                  newLines[lineIdx] = activeDiagnostic.suggestedCodeSnippet!;
-                  onChange(newLines.join('\n'));
-                }
-              }}
-              className="px-2.5 py-1 rounded font-semibold text-[11px] flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
-              style={{
-                backgroundColor: activeDiagnostic.severity === 'error' ? '#ef4444' : activeTheme.colors.accent,
-                color: '#ffffff',
-              }}
-              title="Remplacer automatiquement par la correction suggérée"
-            >
-              <span>⚡ Appliquer la correction</span>
-            </button>
-          </div>
-        )}
-      </div>
-    )}
 
     {/* Mobile Ergonomic Quick Symbol Bar: fast Python typing for smartphones (phones only) */}
     <div
@@ -1051,7 +973,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.textPrimary,
         }}
-        title="Indentation 4 espaces"
+        title="Indentation 4 espaces (PEP 8)"
       >
         Tab
       </button>
@@ -1059,226 +981,61 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol(';')}
+        onClick={() => insertPair('f"', '"')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxInterpolation,
+        }}
+        title='f-string f"" avec curseur au milieu'
+      >
+        f""
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol(':')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.accent,
         }}
-        title="Point-virgule (;)"
+        title="Deux-points de bloc Python (:)"
       >
-        ;
+        :
       </button>
 
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('if ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Structure conditionnelle if"
-      >
-        if
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('else ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Alternative conditionnelle else"
-      >
-        else
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('while ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Boucle conditionnelle while"
-      >
-        while
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('for ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Boucle itérative for"
-      >
-        for
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('!')}
+        onClick={() => insertSymbol('# ')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxOperator,
+          color: activeTheme.colors.syntaxComment,
         }}
-        title="Union d'erreur (!T)"
+        title="Commentaire Python (#)"
       >
-        !
+        #
       </button>
 
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('?')}
+        onClick={() => insertSymbol('def ')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxOperator,
-        }}
-        title="Optionnel (?T)"
-      >
-        ?
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('defer ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
           color: activeTheme.colors.syntaxKeyword,
         }}
-        title="Instruction defer (nettoyage LIFO garanti)"
+        title="Mot-clé def"
       >
-        defer
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('try ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Propagation d'erreur try"
-      >
-        try
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('const ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Constante immuable"
-      >
-        const
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('var ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Variable mutable"
-      >
-        var
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('pub fn ')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxKeyword,
-        }}
-        title="Fonction publique"
-      >
-        pub fn
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('const std = @import("std");\n')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxAnnotation,
-        }}
-        title="Importer la bibliothèque standard"
-      >
-        @import("std")
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('std.debug.print("{s}\\n", .{"Zig"});\n')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.accent,
-        }}
-        title="Afficher avec std.debug.print"
-      >
-        std.debug.print
-      </button>
-
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertPair('.{', '}')}
-        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95 cursor-pointer"
-        style={{
-          backgroundColor: activeTheme.colors.tabInactiveBg,
-          borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxDefault,
-        }}
-        title="Tuple anonyme .{}"
-      >
-        .{'{ }'}
+        def
       </button>
 
       <button
@@ -1291,7 +1048,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.syntaxString,
         }}
-        title="Caractère simple ''"
+        title="Guillemets simples doubles '' avec curseur au milieu"
       >
         ' '
       </button>
@@ -1306,7 +1063,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.syntaxString,
         }}
-        title='Chaîne de caractères ""'
+        title='Guillemets doubles "" avec curseur au milieu'
       >
         " "
       </button>
@@ -1351,7 +1108,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           borderColor: activeTheme.colors.border,
           color: activeTheme.colors.textPrimary,
         }}
-        title="Accolades de bloc {}"
+        title="Accolades {}"
       >
         {'{ }'}
       </button>
@@ -1373,7 +1130,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol(' != ')}
+        onClick={() => insertSymbol('.')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
@@ -1381,22 +1138,78 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           color: activeTheme.colors.textPrimary,
         }}
       >
-        !=
+        .
       </button>
 
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => insertSymbol('// ')}
+        onClick={() => insertSymbol(', ')}
         className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
         style={{
           backgroundColor: activeTheme.colors.tabInactiveBg,
           borderColor: activeTheme.colors.border,
-          color: activeTheme.colors.syntaxComment,
+          color: activeTheme.colors.textPrimary,
         }}
-        title="Commentaire (//)"
       >
-        //
+        ,
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('_')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.textPrimary,
+        }}
+      >
+        _
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol(' => ')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxKeyword,
+        }}
+        title="Flèche =>"
+      >
+        =&gt;
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('!')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxOperator,
+        }}
+      >
+        !
+      </button>
+
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => insertSymbol('?')}
+        className="px-2.5 py-1 rounded text-xs font-mono font-bold border shrink-0 transition-transform active:scale-95"
+        style={{
+          backgroundColor: activeTheme.colors.tabInactiveBg,
+          borderColor: activeTheme.colors.border,
+          color: activeTheme.colors.syntaxOperator,
+        }}
+      >
+        ?
       </button>
     </div>
   </div>
@@ -1412,21 +1225,20 @@ function getTokenColor(token: Token, theme: PythonTheme): string {
     case 'string':
     case 'char':
       return theme.colors.syntaxString;
-    case 'builtin':
-      return theme.colors.syntaxAnnotation;
+    case 'preprocessor':
+      return theme.colors.syntaxAnnotation || theme.colors.syntaxKeyword;
     case 'number':
       return theme.colors.syntaxNumber;
     case 'comment':
-    case 'docComment':
       return theme.colors.syntaxComment;
     case 'function':
       return theme.colors.syntaxFunction;
     case 'operator':
       return theme.colors.syntaxOperator;
-    case 'punctuation':
-      return theme.colors.textSecondary;
     case 'identifier':
-      return theme.colors.syntaxVariable;
+      return theme.colors.syntaxVariable || theme.colors.syntaxDefault;
+    case 'punctuation':
+    case 'default':
     default:
       return theme.colors.syntaxDefault;
   }

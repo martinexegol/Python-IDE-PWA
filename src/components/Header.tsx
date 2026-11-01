@@ -2,7 +2,7 @@ import React from 'react';
 import { PythonTheme, PythonDiagnostic } from '../types';
 import { THEMES } from '../themes';
 import { Play, AlignLeft, Palette, Loader2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { PWAInstallButton } from './PWAInstallButton';
+import { PWAInstallButton, CIcon } from './PWAInstallButton';
 
 interface HeaderProps {
   activeTheme: PythonTheme;
@@ -59,16 +59,12 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* IDE Brand Title */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Zig Logo Icon */}
-          <svg className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" viewBox="0 0 128 128">
-            <polygon points="64,4 120,34 120,94 64,124 8,94 8,34" fill="#F7A41D" />
-            <polygon points="64,12 112,38 112,90 64,116 16,90 16,38" fill="#1A1816" />
-            <text x="64" y="84" fill="#F7A41D" fontSize="66" fontWeight="900" fontFamily="sans-serif" textAnchor="middle">Z</text>
-          </svg>
+          {/* C Logo Icon */}
+          <CIcon className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 drop-shadow-xs" />
           <div className="flex items-baseline gap-1.5 sm:gap-2">
-            <span className="font-bold tracking-tight text-sm sm:text-base whitespace-nowrap">Zig IDE</span>
+            <span className="font-bold tracking-tight text-sm sm:text-base whitespace-nowrap">C IDE</span>
             <span className="text-[11px] font-mono px-1.5 py-0.5 rounded opacity-75 hidden sm:inline" style={{ backgroundColor: activeTheme.colors.tabInactiveBg }}>
-              zig 0.13.0
+              GCC 13.2 / C11
             </span>
           </div>
         </div>
@@ -155,10 +151,10 @@ export const Header: React.FC<HeaderProps> = ({
             borderColor: activeTheme.colors.border,
             color: activeTheme.colors.textPrimary,
           }}
-          title="Formater le code Zig (indentation 4 espaces)"
+          title="Formater le code C (indentation 4 espaces)"
         >
           <AlignLeft className="w-3.5 h-3.5 shrink-0" />
-          <span className="hidden xl:inline">Formater Zig</span>
+          <span className="hidden xl:inline">Formater C</span>
           <span className="inline xl:hidden">Formater</span>
         </button>
 
@@ -171,7 +167,7 @@ export const Header: React.FC<HeaderProps> = ({
             backgroundColor: activeTheme.colors.accent,
             color: activeTheme.colors.accentText,
           }}
-          title="Compiler et exécuter avec Zig 0.13.0 [F5]"
+          title="Compiler et exécuter avec GCC 13.2 [F5]"
         >
           {isRunning ? (
             <>
@@ -182,7 +178,7 @@ export const Header: React.FC<HeaderProps> = ({
             <>
               <Play className="w-3.5 h-3.5 fill-current shrink-0" />
               <span className="hidden xl:inline">Compiler & Exécuter</span>
-              <span className="inline xl:hidden">Exécuter Zig</span>
+              <span className="inline xl:hidden">Exécuter C</span>
             </>
           )}
         </button>
